@@ -1,0 +1,823 @@
+-- HD2-Addon: mods/hivelord/hivelord_roster
+-- READ-ONLY faction-roster reader.  Answers one question the networked field array
+-- cannot answer reliably: *is the Hive Lord in this mission at all?*
+--
+-- WHY THIS EXISTS
+--   The one live run where a Hive Lord was fought and killed with the reader running
+--   probed 901 census objects and found no 150000 anywhere, so "it was not there" and
+--   "I could not read it" were indistinguishable.  The roster is a different signal:
+--   it is the director's own list of faction entities, reachable by pointer arithmetic
+--   from a module RVA, and independent of whatever the network layer chooses to sync.
+--
+-- LAYOUT  (All-Stalker v0.2.1 docs/TECHNICAL.md; Steam build 24826606 / exe 1.8.45317.0)
+--   director = *(game.dll + 0x276CA20)
+--   header   = *(director + 0x660 | 0x668 | 0x670)      three faction slots
+--   rows     = *(header + 0x00)     count = *(header + 0x08)
+--   row i    = rows + i*0x80        entity id = *(row + 0x08), 8 bytes
+--   and 0x93F159 is the instruction that reads that field (49 8b 40 08 = mov rax,[r8+8]),
+--   which is what the build gate below verifies before trusting any of it.
+--
+-- IDENTITY  (work/hivelord/verify_entity_id.py, two independent sources)
+--   our own byte-exact parse of the plaintext datalibrary resolves the Hive Lord's
+--   content path and hashes it: murmur64a('content/fac_bugs/cha_hive_lord/cha_hive_lord')
+--   = 0xD465D9C7F77A07CB; All-Stalker's capture of the live 44-row Terminid roster
+--   carries that same id as row 35.  Stored little-endian it is cb 07 7a f7 c7 d9 65 d4.
+--
+-- SAFETY
+--   Read only: ReadProcessMemory and GetModuleHandleA on the current process.  No
+--   VirtualProtect, no WriteProcessMemory, no other process is opened, no code pages are
+--   touched.  Every pointer is range-checked before it is dereferenced, and a build whose
+--   signature does not match is refused rather than guessed at.
+
+local ffi_ok, ffi = pcall(require, 'ffi')
+if rawget(_G, '__HIVELORD_ROSTER_INSTALLED') then return { installed = true } end
+
+local loader = rawget(_G, 'CowboyBingusModLoader')
+local loader_api = type(loader) == 'table' and tonumber(loader.api) or nil
+local loader_version = type(loader) == 'table' and tonumber(loader.version) or nil
+
+-- ---------------------------------------------------------------- configuration
+local C = {
+    debug = true,
+    poll_seconds = 2,
+    max_rows = 512,          -- sanity bound on a roster count before trusting it
+    row_stride = 0x80,
+    row_entity_off = 0x08,
+    director_rva = 0x276CA20,
+    row_read_rva = 0x93F159, -- the instruction that reads row+8
+    -- Live health manager internals, from Enemy HP 1.1.1's shipped Lua.
+    hp_count_off = 0x1020,   -- *(hm + this) -> u32 entry count
+    hp_arr_off = 0x1048,     -- *(hm + this) -> descriptor pointer array
+    hp_recs_off = 0x1058,    -- *(hm + this) -> record array
+    hp_record_stride = 0x1B8,
+    hp_value_off = 0x14,     -- current health inside a record
+    roster_dump = true,
+    start_delay = 600,       -- frames; the director is not set until a mission loads
+}
+local dir = os.getenv and os.getenv('APPDATA') or nil
+if dir and io and io.open then
+    local f = io.open(dir .. '/Arrowhead/Helldivers2/hivelord_roster.cfg', 'r')
+    if f then
+        for l in f:lines() do
+            local k, v = l:match('^%s*([%w_]+)%s*=%s*([%w%.%-]+)')
+            if k and C[k] ~= nil then
+                if v == 'true' then C[k] = true
+                elseif v == 'false' then C[k] = false
+                else
+                    local n = tonumber(v)
+                    if n and n == n and n >= 0 then C[k] = n end
+                end
+            end
+        end
+        f:close()
+    end
+end
+
+-- ------------------------------------------------------- byte helpers (pure Lua)
+-- LuaJIT numbers hold 53 bits, so a 64-bit id is only ever handled as a byte string or
+-- as its hex text.  Everything below works on strings for that reason.
+local function le_hex(hex)
+    return (hex:gsub('%x%x', function(p) return string.char(tonumber(p, 16)) end))
+end
+
+-- The Hive Lord, stored the way the roster stores ids.  The same 64-bit value is both
+-- the roster entity id and the HealthComponentData key the descriptor carries, which is
+-- why one constant serves both reads.
+local HIVE_LORD = le_hex('cb077af7c7d965d4')
+
+-- Offline-verified maximum, from record 27 of HealthComponentData in the plaintext
+-- datalibrary (work/hivelord/HIVE_LORD_HEALTH.md), and the number the wiki lists.
+local MAX_HP = 150000
+
+-- The 39 unique entity ids from All-Stalker's capture of the live Terminid roster.  They
+-- are not needed to find the Hive Lord; they are how this reader proves to itself that
+-- it is looking at the right structure.  A wrong stride or a wrong slot yields a roster
+-- that does not intersect this set at all, and that is reported rather than hidden.
+-- The 39 unique entity ids from All-Stalker's capture of the live Terminid roster
+-- (generated by work/hivelord/emit_reference.py -- hand-copying the 44 rows once already
+-- dropped an entry).  They are not needed to find the Hive Lord; they are how this reader
+-- proves to itself that it is looking at the right structure.  A wrong stride or a wrong
+-- slot yields a roster that does not intersect this set at all, and that is reported
+-- instead of being hidden behind a confident "not here".
+local REFERENCE = {}
+local function add_reference(list)
+    for _, h in ipairs(list) do REFERENCE[#REFERENCE + 1] = le_hex(h) end
+end
+add_reference({
+    '4e7e99f66ba8ee51', '0c237b28ae3a8a9a', '3ddbd6ce493ea872', 'd98f5e6f5938b4aa',
+    'b96be4a113e339be', 'dc9c7cecc41f5432', 'e4bd0fa4f27bf3a1', 'f63e16f6ce1a0810',
+    'cae174d5e2030e3d', 'bac045744432a85c', 'a543d44847fd22d5', 'b064c698ffcd7f1a',
+    '4cacb367ecd15ba0', '4601e6e5cc99aa36', 'b791d5ac6452aecc', 'ddafccccf2172e9e',
+    '2e424a9d9dca40f5', 'dc48a977d9cbbadf', '4b7adc3b07fb974e', '9b0872d1fd2270cc',
+    '990b45d5d75fff3a', 'dd35245088000964', '883d333823e22160', '3beefb1242e7f8dc',
+    '4aa33b7fa17d2f67', 'df974365bbd89cf7', 'e6c784421efaa6b2', '5e60abf49223206b',
+    '525a2df2ba90e9d1', 'cb077af7c7d965d4', 'aafaa321a4480b96', '94ebd3071ca181a3',
+    '060815f2c60752a3', '8c221c132bb9b70a', '97a497d084cb04ef', 'bc0e441d35218472',
+    'e004009c72910a1f', '01f51cbe314696db', '0378893c654752fd',
+})
+local REF_SET = {}
+for _, v in ipairs(REFERENCE) do REF_SET[v] = true end
+
+-- Pure: pull the entity ids out of a raw row block.  Kept separate from the memory
+-- access so the offline suite can drive it with an exact byte string.
+local function entities_in(blob, count, stride, off)
+    local out = {}
+    for i = 0, count - 1 do
+        local p = i * stride + off
+        if p + 8 > #blob then break end
+        out[#out + 1] = blob:sub(p + 1, p + 8)
+    end
+    return out
+end
+
+-- Pure: does this roster contain the Hive Lord, and where?
+local function find_entity(entities, want)
+    for i, e in ipairs(entities) do
+        if e == want then return i end
+    end
+    return nil
+end
+
+-- Pure: how many of the captured reference entities appear in this roster.  This is the
+-- self-check: it is what separates "read the roster" from "read something plausible".
+local function reference_overlap(entities)
+    local n, seen = 0, {}
+    for _, e in ipairs(entities) do
+        if REF_SET[e] and not seen[e] then
+            seen[e] = true
+            n = n + 1
+        end
+    end
+    return n
+end
+
+local function u64_at(s, off)
+    if not s or off < 0 or off + 8 > #s then return nil end
+    return s:sub(off + 1, off + 8)
+end
+
+-- -------------------------------------------------------------------- logging
+local outdir, log_path
+local log_ok, log_fail = 0, 0
+if io and io.open then
+    local la = os.getenv and os.getenv('LOCALAPPDATA') or nil
+    local tp = os.getenv and os.getenv('TEMP') or nil
+    local cands = {}
+    if dir then cands[#cands + 1] = dir .. '/Arrowhead/Helldivers2' end
+    if la then cands[#cands + 1] = la .. '/CowboyBingus/Helldivers2/Logs' end
+    if tp then cands[#cands + 1] = tp end
+    cands[#cands + 1] = '.'
+    for _, d in ipairs(cands) do
+        local probe = io.open(d .. '/hivelord_roster.log', 'a')
+        if probe then
+            outdir = d
+            log_path = d .. '/hivelord_roster.log'
+            pcall(function() probe:close() end)
+            break
+        end
+    end
+end
+
+local function w(line)
+    if not log_path or not io or not io.open then return end
+    local f = io.open(log_path, 'a')
+    if not f then log_fail = log_fail + 1; return end
+    local ok = pcall(function() f:write(line, '\n'); f:close() end)
+    if not ok then
+        pcall(function() f:close() end)
+        log_fail = log_fail + 1
+        return
+    end
+    log_ok = log_ok + 1
+end
+local function wf(fmt, ...) w(string.format(fmt, ...)) end
+wf('LOG_OPEN path=%s', tostring(log_path))
+
+-- The loader may manage the game's shared LuaJIT code cache (loader v18+).  Its state
+-- belongs in this file because it changes how this mod's own timings should be read: a
+-- cache flush discards every compiled trace, so a hitch or a slow scan during one is the
+-- environment, not this mod.
+--
+-- The loader's `version` field is NOT a reliable signal for this: the v18 source still
+-- reports version = 17.  Presence of `CowboyBingusModLoader.jit` (and its `managed`
+-- flag) is what actually tells a mod that the cache is handled.
+local function jit_state()
+    local j = type(loader) == 'table' and loader.jit or nil
+    if type(j) ~= 'table' then return 'not exposed (loader before v18, or discovery only)' end
+    if not j.managed then return 'unmanaged (' .. tostring(j.reason) .. ')' end
+    return string.format('managed %s KB / %s traces, flushes=%s growth=%s watcher=%s',
+        tostring(j.mcode_kb), tostring(j.traces), tostring(j.flushes),
+        tostring(j.growths), tostring(j.watcher))
+end
+
+local STATUS = {}
+local function write_status()
+    if not outdir or not io or not io.open then return end
+    local path = outdir .. '/hivelord_roster_STATUS.txt'
+    local body = {}
+    body[#body + 1] = 'hivelord-roster-v1.1.0 (read-only)'
+    body[#body + 1] = 'loader api=' .. tostring(loader_api)
+        .. ' version=' .. tostring(loader_version)
+    body[#body + 1] = 'loader jit: ' .. jit_state()
+    body[#body + 1] = 'log: ' .. tostring(log_path) .. ' lines=' .. log_ok
+        .. ' failed=' .. log_fail
+    for _, v in ipairs(STATUS) do body[#body + 1] = v end
+    -- Staged then renamed: a truncate-then-write left a live session with a 0-byte
+    -- status file once, sampled exactly in the gap.
+    local tmp = path .. '.new'
+    local f = io.open(tmp, 'w')
+    if not f then return end
+    local ok = pcall(function() f:write(table.concat(body, '\n'), '\n'); f:close() end)
+    if not ok then pcall(function() f:close() end); return end
+    if type(os.remove) == 'function' then pcall(os.remove, path) end
+    if type(os.rename) == 'function' then pcall(os.rename, tmp, path) end
+end
+local function status(line)
+    STATUS[#STATUS + 1] = line
+    write_status()
+end
+
+-- The first conclusion in the file is what a user reads, so it is replaced in place
+-- rather than appended -- an appended list of every state the reader passed through is
+-- exactly the unreadable status file this project already produced once.
+local conclusion_at
+local function conclude(line)
+    if conclusion_at then STATUS[conclusion_at] = line
+    else conclusion_at = #STATUS + 1; STATUS[conclusion_at] = line end
+    write_status()
+end
+
+local function refuse(reason)
+    wf('REFUSED %s', reason)
+    conclude('REFUSED - ' .. reason)
+    return { installed = false, reason = reason }
+end
+
+if not ffi_ok or type(ffi) ~= 'table' then
+    conclude('REFUSED - the ffi builtin is unavailable')
+    return { installed = false, reason = 'no ffi' }
+end
+if not ffi.abi('64bit') then
+    conclude('REFUSED - this build is not 64-bit')
+    return { installed = false, reason = 'not 64-bit' }
+end
+if loader_api and loader_api < 1 then
+    return refuse('Bingus Shared Loader API is ' .. tostring(loader_api) .. ', need >= 1')
+end
+
+-- --------------------------------------------------------------- the reader
+ffi.cdef [[
+    void *GetModuleHandleA(const char *);
+    void *GetCurrentProcess(void);
+    int   ReadProcessMemory(void *, const void *, void *, size_t, size_t *);
+    typedef struct {
+        uint64_t BaseAddress;
+        uint64_t AllocationBase;
+        uint32_t AllocationProtect;
+        uint32_t __alignment1;
+        uint64_t RegionSize;
+        uint32_t State;
+        uint32_t Protect;
+        uint32_t Type;
+        uint32_t __alignment2;
+    } HL_ROSTER_MBI;
+    size_t VirtualQuery(const void *, HL_ROSTER_MBI *, size_t);
+]]
+local kernel = ffi.load('kernel32')
+local process = kernel.GetCurrentProcess()
+
+local MEM_COMMIT, PAGE_GUARD = 0x1000, 0x100
+
+-- Committed, executable, non-guarded regions belonging to one module.
+--
+-- The health manager is reached through a data global, but the RVA that reaches it has
+-- to come from the loaded code: disk game.dll is encrypted (measured entropy 7.9998
+-- bits/byte), so the only readable copy of the code is the decrypted one in memory.
+-- Scanning is bounded to the module's own executable regions -- a few MB, not the whole
+-- address space.
+local function exe_regions(base)
+    local out = {}
+    local mbi = ffi.new('HL_ROSTER_MBI')
+    local addr, guard = base, 0
+    while guard < 4096 do
+        guard = guard + 1
+        local got = kernel.VirtualQuery(ffi.cast('const void *', addr), mbi, ffi.sizeof(mbi))
+        if got ~= ffi.sizeof(mbi) or mbi.RegionSize == 0 then break end
+        if tonumber(mbi.AllocationBase) ~= base then break end
+        local size = tonumber(mbi.RegionSize)
+        local prot = tonumber(mbi.Protect) % 0x100
+        -- PAGE_EXECUTE / _READ / _READWRITE / _WRITECOPY.  Modifier bits (0x01 no-access,
+        -- 0x02 read-only, 0x04 write-copy) are OR'd on top, so mask them off first.
+        local exec = false
+        for _, m in ipairs({ 0, 1, 2, 4, 8, 16 }) do
+            local b = prot - m
+            if b == 0x10 or b == 0x20 or b == 0x40 or b == 0x80 then exec = true break end
+        end
+        if tonumber(mbi.State) == MEM_COMMIT and math.floor(prot / PAGE_GUARD) % 2 == 0
+            and exec then
+            out[#out + 1] = { base = tonumber(mbi.BaseAddress), size = size }
+        end
+        addr = addr + size
+        if #out > 64 then break end
+    end
+    return out
+end
+
+local function module_base(name)
+    local h = kernel.GetModuleHandleA(name)
+    if h == nil then return nil end
+    local v = tonumber(ffi.cast('uintptr_t', h))
+    if not v or v < 65536 then return nil end
+    return v
+end
+
+-- Strict bounds before any dereference: an implausible address must never reach
+-- ReadProcessMemory, because a bad pointer there is how a reader turns into a crash.
+local function read(addr, size)
+    if type(addr) ~= 'number' or addr % 1 ~= 0 or addr < 65536 or addr >= 2 ^ 47 then
+        return nil
+    end
+    if type(size) ~= 'number' or size % 1 ~= 0 or size < 1 or size > 1048576 then
+        return nil
+    end
+    local buf = ffi.new('uint8_t[?]', size)
+    local got = ffi.new('size_t[1]')
+    local ok = kernel.ReadProcessMemory(process, ffi.cast('void *', addr), buf, size, got)
+    if ok == 0 or tonumber(got[0]) ~= size then return nil end
+    return ffi.string(buf, size)
+end
+
+local function ptr_at(addr)
+    local b = read(addr, 8)
+    if not b then return nil end
+    -- A pointer is only ever used as an address; the bytes are read as two u32s so the
+    -- value never round-trips through a 53-bit number.
+    local lo = b:byte(1) + b:byte(2) * 256 + b:byte(3) * 65536 + b:byte(4) * 16777216
+    local hi = b:byte(5) + b:byte(6) * 256 + b:byte(7) * 65536 + b:byte(8) * 16777216
+    if hi >= 32768 then return nil end
+    local v = hi * 4294967296 + lo
+    if v < 65536 or v >= 2 ^ 47 then return nil end
+    return v
+end
+
+-- ====================================================== the live health records
+-- Enemy HP 1.1.1 (shipped as plaintext Lua, extracted from its archive) reads the live
+-- per-entity health like this:
+--
+--   hm   = *(game + RVA)                     health manager singleton
+--   n    = u32(*(hm + 0x1020))               entry count
+--   arr  = *(hm + 0x1048)                    descriptor pointer array
+--   recs = *(hm + 0x1058)                    record array
+--   for j: d = *(arr + j*8)                  descriptor [u64 type][u32 entity][u32 unit]
+--          hp = i32(*(recs + j*0x1B8 + 0x14)) <-- CURRENT health, exactly
+--   max comes from the HealthComponentData table keyed by the descriptor's type hash
+--   (stride 0x5650, main health at record+0x00 -- the table this project already parsed
+--   byte-exactly offline, whose record 27 is the Hive Lord with main health 150000).
+--
+-- This corrects an earlier conclusion of this project.  Four full memory scans and an
+-- external scan all failed to find a live HealthComponent, and the client's only
+-- runtime health *type* is a four-byte SyncedHealthComponent -- but the live per-entity
+-- health does not live in a HealthComponent at all.  It lives in these 0x1B8-stride
+-- records, which is why a signature built from the archetype's fields could never find
+-- it.  The enemy HP readout in the reference mod is exact for ordinary enemies, so the
+-- same read must work for the Hive Lord.
+--
+-- The RVA cannot be taken from the shipping game.dll: its code section is encrypted
+-- (measured entropy 7.9998 bits/byte).  In memory it is decrypted, and the accessor
+-- necessarily touches +0x1048 and +0x1058, so the global is recovered from those
+-- displacements.  That also means a game update moves the offsets without breaking the
+-- reader, instead of producing a confident wrong number.
+
+local function i32_at(s, off)
+    if not s or off < 0 or off + 4 > #s then return nil end
+    local a, b, c, d = s:byte(off + 1, off + 4)
+    if not a then return nil end
+    local v = a + b * 256 + c * 65536 + d * 16777216
+    if v >= 2147483648 then v = v - 4294967296 end
+    return v
+end
+
+local function u32_at(s, off)
+    if not s or off < 0 or off + 4 > #s then return nil end
+    local a, b, c, d = s:byte(off + 1, off + 4)
+    if not a then return nil end
+    return a + b * 256 + c * 65536 + d * 16777216
+end
+
+-- ModRM decoding.  The mod field is bits 6-7, so it is `floor(b/0x40) % 4`; masking with
+-- `% 0x40` keeps the LOW bits instead and yields something below 0x40, which can never
+-- equal 0x80 -- a condition that is always false and therefore finds nothing at all.
+local function modrm_mod(b) return math.floor(b / 0x40) % 4 end
+local function modrm_rm(b) return b % 8 end
+
+-- Pure: every offset in `code` holding a `mov r64,[r64+disp32]` with this displacement.
+local function sites_with_disp(code, disp)
+    local out = {}
+    local w1 = disp % 256
+    local w2 = math.floor(disp / 256) % 256
+    local w3 = math.floor(disp / 65536) % 256
+    local w4 = math.floor(disp / 16777216) % 256
+    for i = 0, #code - 8 do
+        local b0, b1, b2 = code:byte(i + 1), code:byte(i + 2), code:byte(i + 3)
+        if (b0 == 0x48 or b0 == 0x4C) and b1 == 0x8B and modrm_mod(b2) == 2 then
+            local d1, d2, d3, d4
+            if modrm_rm(b2) == 4 then
+                -- A SIB byte follows, so the displacement starts one byte later.
+                local sib = code:byte(i + 4)
+                if sib then d1, d2, d3, d4 = code:byte(i + 5, i + 8) end
+            else
+                d1, d2, d3, d4 = code:byte(i + 4, i + 7)
+            end
+            if d1 == w1 and d2 == w2 and d3 == w3 and d4 == w4 then out[#out + 1] = i end
+        end
+    end
+    return out
+end
+
+-- Pure: walk back from an instruction to the RIP-relative global load that fed it.
+local function global_load_before(code, site, va)
+    for back = 4, 96 do
+        local p = site - back
+        if p >= 0 then
+            local b0, b1, b2 = code:byte(p + 1), code:byte(p + 2), code:byte(p + 3)
+            -- mod=00 with rm=101 is the RIP-relative form; the register in `reg` does
+            -- not matter, only the addressing mode does.
+            if (b0 == 0x48 or b0 == 0x4C) and b1 == 0x8B and modrm_mod(b2) == 0
+                and modrm_rm(b2) == 5 then
+                local a, b, c, d = code:byte(p + 4, p + 7)
+                if a then
+                    local disp = a + b * 256 + c * 65536 + d * 16777216
+                    if disp >= 2147483648 then disp = disp - 4294967296 end
+                    local target = va + p + 7 + disp
+                    if target >= 65536 and target < 2 ^ 47 then return target end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- Pure: candidate manager globals from one code blob.
+local function manager_candidates(code, va)
+    local out, seen = {}, {}
+    for _, disp in ipairs({ C.hp_arr_off, C.hp_recs_off }) do
+        for _, site in ipairs(sites_with_disp(code, disp)) do
+            local g = global_load_before(code, site, va)
+            if g and not seen[g] then
+                seen[g] = true
+                out[#out + 1] = g
+            end
+        end
+    end
+    return out
+end
+
+local function M_init() return { frame = 0, clock = 0, base = nil, gate = nil,
+                                 last_line = nil, polls = 0 } end
+local M = M_init()
+
+-- Fail closed on a build we do not know.  0x93F159 is the instruction that reads the
+-- entity id at row+8; if it is not there, the offsets below are not this build's offsets
+-- and guessing would produce a confident, wrong answer.
+local function build_gate(base)
+    local b = read(base + C.row_read_rva, 4)
+    if not b then return nil, 'the build gate address is unreadable' end
+    local hex = (b:gsub('.', function(c) return string.format('%02x', c:byte()) end))
+    if hex ~= '498b4008' then
+        return nil, string.format('game.dll+0x%X is %s, expected 498b4008 (mov rax,[r8+8]) '
+            .. '-- this is not the build the offsets were verified against', C.row_read_rva, hex)
+    end
+    return true
+end
+
+-- Live: does a candidate global actually hold the documented manager?  A wrong global
+-- yields garbage, so the descriptor layout is checked before the manager is believed.
+local function try_manager(gva)
+    local hm = ptr_at(gva)
+    if not hm then return nil end
+    -- The count is a u32 stored AT hm+0x1020, not a pointer to one: the reference does
+    -- `c = rd(hm + 0x1020, 4); n = u32(c, 0)`, which decodes the same four bytes twice.
+    local n = u32_at(read(hm + C.hp_count_off, 4), 0)
+    if not n or n == 0 or n > 2048 then return nil end
+    local arr = ptr_at(hm + C.hp_arr_off)
+    local recs = ptr_at(hm + C.hp_recs_off)
+    if not arr or not recs then return nil end
+    local good = 0
+    for j = 0, math.min(n, 8) - 1 do
+        local d = ptr_at(arr + j * 8)
+        local db = d and read(d, 24)
+        if db and db:sub(1, 8) ~= string.rep('\0', 8) then good = good + 1 end
+    end
+    if good == 0 then return nil end
+    return { gva = gva, hm = hm, n = n, arr = arr, recs = recs, good = good }
+end
+
+-- Live: the Hive Lord's entry, by the descriptor's type hash.
+--
+-- The descriptor's first u64 is the same resource hash the roster stores as the entity
+-- id and that the plaintext datalibrary uses as the HealthComponentData key -- which is
+-- why the constant already established by verify_entity_id.py is the one to match.
+local function entity_health(mgr, type_le)
+    for j = 0, mgr.n - 1 do
+        local d = ptr_at(mgr.arr + j * 8)
+        local db = d and read(d, 24)
+        if db and db:sub(1, 8) == type_le then
+            local hp = i32_at(read(mgr.recs + j * C.hp_record_stride + C.hp_value_off, 4), 0)
+            return j, hp, u32_at(db, 8), u32_at(db, 12)
+        end
+    end
+    return nil
+end
+
+-- One chunk of the module's executable bytes per poll.  The size must stay within the
+-- reader's own per-call cap: at 4 MB every chunk read returned nil, and because a nil
+-- chunk was skipped without a word the scan simply never found anything -- a silent
+-- failure that looks exactly like "this build has no health manager".  The cap is
+-- asserted below, and an unreadable chunk is now reported.
+local SCAN_CHUNK = 1024 * 1024
+local MAX_READ = 1048576
+local function health_scan()
+    if M.mgr or M.mgr_failed then return end
+    if not M.regions then
+        M.regions = exe_regions(M.base)
+        M.ri, M.off, M.tried, M.cands = 1, 0, {}, 0
+        local total = 0
+        for _, r in ipairs(M.regions) do total = total + r.size end
+        wf('EXE_REGIONS count=%d bytes=%d chunk=%d', #M.regions, total, SCAN_CHUNK)
+        if SCAN_CHUNK > MAX_READ then
+            M.mgr_failed = true
+            wf('HEALTH_MANAGER refused: scan chunk %d exceeds the reader cap %d',
+                SCAN_CHUNK, MAX_READ)
+            return
+        end
+    end
+    if M.ri > #M.regions then
+        M.mgr_failed = true
+        wf('HEALTH_MANAGER not found: %d candidate global(s) tried over %d region(s)',
+            M.cands, #M.regions)
+        return
+    end
+    local r = M.regions[M.ri]
+    local want = math.min(SCAN_CHUNK, r.size - M.off)
+    if want < 8 then
+        M.ri, M.off = M.ri + 1, 0
+        return
+    end
+    local blob = read(r.base + M.off, want)
+    if not blob then
+        -- Never skip a chunk in silence: an unreadable chunk and a chunk with no match
+        -- are different facts, and only one of them means "this build has no manager".
+        M.bad_chunks = (M.bad_chunks or 0) + 1
+        if M.bad_chunks <= 3 then
+            wf('HEALTH_SCAN unreadable chunk at 0x%X size=%d', r.base + M.off, want)
+        end
+    end
+    if blob then
+        for _, g in ipairs(manager_candidates(blob, r.base + M.off)) do
+            if not M.tried[g] then
+                M.tried[g] = true
+                M.cands = M.cands + 1
+                local mgr = try_manager(g)
+                if mgr then
+                    M.mgr = mgr
+                    wf('HEALTH_MANAGER global=0x%X hm=0x%X n=%d arr=0x%X recs=0x%X '
+                        .. 'descriptors_ok=%d candidates=%d',
+                        g, mgr.hm, mgr.n, mgr.arr, mgr.recs, mgr.good, M.cands)
+                    return
+                end
+            end
+        end
+    end
+    -- The 16-byte overlap keeps a pattern on a chunk seam from being lost, but it must
+    -- never stall progress: when the remaining bytes are no larger than the overlap,
+    -- subtracting it moves the cursor backwards (or nowhere), the region never finishes,
+    -- and the scan never reaches a verdict at all.  Advance by at least one chunk.
+    local step = want - 16
+    if step < 1 then step = want end
+    if M.off + step >= r.size then
+        M.ri, M.off = M.ri + 1, 0
+    else
+        M.off = M.off + step
+    end
+end
+
+local function scan_slot(director, slot)
+    local header = ptr_at(director + slot)
+    if not header then return { slot = slot, state = 'no roster' } end
+    local rows = ptr_at(header)
+    local count_blob = read(header + 8, 4)
+    if not count_blob then return { slot = slot, state = 'unreadable header' } end
+    local count = count_blob:byte(1) + count_blob:byte(2) * 256
+        + count_blob:byte(3) * 65536 + count_blob:byte(4) * 16777216
+    if count == 0 or count > C.max_rows then
+        return { slot = slot, state = 'implausible count', count = count }
+    end
+    if not rows then return { slot = slot, state = 'no rows', count = count } end
+    local blob = read(rows, count * C.row_stride)
+    if not blob then return { slot = slot, state = 'rows unreadable', count = count } end
+    local ents = entities_in(blob, count, C.row_stride, C.row_entity_off)
+    return { slot = slot, state = 'ok', count = count, entities = ents,
+             hive_row = find_entity(ents, HIVE_LORD),
+             overlap = reference_overlap(ents) }
+end
+
+local function hex_of(s)
+    return (s:gsub('.', function(c) return string.format('%02x', c:byte()) end))
+end
+
+local function dump(slots)
+    if not C.roster_dump or not outdir or not io or not io.open then return end
+    local parts = {
+        '# faction rosters read from the live director (read-only)',
+        '# slot\trow\tentity_id (little-endian hex)\tknown',
+    }
+    for _, s in ipairs(slots) do
+        if s.state == 'ok' then
+            for i, e in ipairs(s.entities) do
+                local tag = 'other'
+                if e == HIVE_LORD then tag = 'HIVE_LORD'
+                elseif REF_SET[e] then tag = 'terminid(reference)' end
+                parts[#parts + 1] = string.format('0x%X\t%d\t%s\t%s',
+                    s.slot, i - 1, hex_of(e), tag)
+            end
+        else
+            parts[#parts + 1] = string.format('0x%X\t-\t%s\t-', s.slot, s.state)
+        end
+    end
+    local tmp = outdir .. '/hivelord_roster.txt.new'
+    local f = io.open(tmp, 'w')
+    if not f then return end
+    local ok = pcall(function() f:write(table.concat(parts, '\n'), '\n'); f:close() end)
+    if not ok then pcall(function() f:close() end); return end
+    if type(os.remove) == 'function' then pcall(os.remove, outdir .. '/hivelord_roster.txt') end
+    if type(os.rename) == 'function' then
+        pcall(os.rename, tmp, outdir .. '/hivelord_roster.txt')
+    end
+end
+
+local function poll()
+    M.polls = M.polls + 1
+    if not M.base then
+        M.base = module_base('game.dll')
+        if not M.base then
+            conclude('WAITING - game.dll is not loaded in this process')
+            return
+        end
+        local ok, why = build_gate(M.base)
+        if not ok then
+            M.gate = 'failed'
+            wf('BUILD_GATE failed %s', tostring(why))
+            conclude('REFUSED - build gate failed: ' .. tostring(why))
+            return
+        end
+        M.gate = 'ok'
+        wf('MODULE game.dll base=0x%X gate=0x%X ok', M.base, C.row_read_rva)
+    end
+    if M.gate ~= 'ok' then return end
+
+    local director = ptr_at(M.base + C.director_rva)
+    if not director then
+        conclude('WAITING - the director is not set yet (not in a mission)')
+        return
+    end
+
+    local slots = {}
+    for _, slot in ipairs({ 0x660, 0x668, 0x670 }) do
+        slots[#slots + 1] = scan_slot(director, slot)
+    end
+
+    local found_row, found_slot, ok_slots, total_rows, best_overlap = nil, nil, 0, 0, 0
+    local summary = {}
+    for _, s in ipairs(slots) do
+        if s.state == 'ok' then
+            ok_slots = ok_slots + 1
+            total_rows = total_rows + s.count
+            if (s.overlap or 0) > best_overlap then best_overlap = s.overlap end
+            if s.hive_row and not found_row then
+                found_row, found_slot = s.hive_row, s.slot
+            end
+        end
+        summary[#summary + 1] = string.format('0x%X:%s%s', s.slot, s.state,
+            s.count and ('/' .. s.count) or '')
+    end
+
+    local where = found_row and string.format('0x%X#%d', found_slot, found_row) or 'no'
+    local summary_text = table.concat(summary, ' ')
+    M.last_summary = summary_text
+    local line = string.format('ROSTER %s rows=%d overlap=%d hive_lord=%s',
+        summary_text, total_rows, best_overlap, where)
+    if line ~= M.last_line then
+        M.last_line = line
+        wf('%s', line)
+        dump(slots)
+        -- The conclusion carries the per-slot states.  "Not in any roster" is only
+        -- meaningful if every roster was actually read: a slot rejected for an
+        -- implausible count has to be visible in the sentence itself, otherwise the same
+        -- sentence covers both "searched and absent" and "never searched" -- the exact
+        -- conflation this project has already been burned by once.
+        if found_row then
+            conclude(string.format(
+                'OK - Hive Lord present: roster slot 0x%X row %d (entity 0xD465D9C7F77A07CB); '
+                .. '%d rows scanned, %d match the captured Terminid roster [%s]',
+                found_slot, found_row, total_rows, best_overlap, summary_text))
+        else
+            conclude(string.format(
+                'OK - Hive Lord NOT in any roster (%d rows scanned across %d slot(s), '
+                .. '%d match the captured Terminid roster) [%s]; overlap 0 means the layout '
+                .. 'is wrong, not that the Hive Lord is absent',
+                total_rows, ok_slots, best_overlap, summary_text))
+        end
+    end
+
+    -- ------------------------------------------- exact health, if reachable
+    -- The roster answers "is it here".  This answers "how much health is left", which
+    -- the networked field array provably cannot (nothing in it goes to zero at death).
+    health_scan()
+    if M.mgr then
+        local j, hp, entity, unit = entity_health(M.mgr, HIVE_LORD)
+        if j then
+            local sane = hp and hp >= 0 and hp <= MAX_HP
+            local text = string.format('HIVELORD_HP j=%d hp=%s max=%d entity=%s unit=%s%s',
+                j, tostring(hp), MAX_HP, tostring(entity), tostring(unit),
+                sane and '' or '  (out of range -- treat as unverified)')
+            if text ~= M.last_hp_text then
+                M.last_hp_text = text
+                wf('%s', text)
+                -- Replaces the roster conclusion: "present" is weaker than "present and
+                -- here is its health".  The roster's per-slot states are carried along,
+                -- because a slot that could not be read must not disappear just because
+                -- a different read succeeded.
+                conclude(string.format(
+                    'OK - Hive Lord HP %s / %d -- exact, from the live health manager '
+                    .. '(global 0x%X, entry %d of %d)%s [roster %s]',
+                    tostring(hp), MAX_HP, M.mgr.gva, j, M.mgr.n,
+                    sane and '' or ' -- VALUE OUT OF RANGE, treat as unverified',
+                    tostring(M.last_summary or '?')))
+            end
+        elseif M.last_hp_text ~= 'absent' then
+            M.last_hp_text = 'absent'
+            wf('HIVELORD_HP absent from the health manager (%d entries scanned)', M.mgr.n)
+        end
+    end
+end
+
+local function update(dt)
+    M.frame = M.frame + 1
+    local step = type(dt) == 'number' and dt or 0.016667
+    if step < 0 then step = 0 elseif step > 0.25 then step = 0.25 end
+    M.clock = M.clock + step
+    if M.frame <= C.start_delay then return end
+    if M.clock < (M.next_poll or 0) then return end
+    M.next_poll = M.clock + C.poll_seconds
+    local ok, err = pcall(poll)
+    if not ok then
+        wf('POLL_ERROR %s', tostring(err))
+        conclude('POLL_ERROR: ' .. tostring(err))
+    end
+end
+
+local old = rawget(_G, 'update')
+if type(old) ~= 'function' then
+    return refuse('no global update to hook')
+end
+rawset(_G, '__HIVELORD_ROSTER_INSTALLED', true)
+local failed = false
+rawset(_G, 'update', function(...)
+    if not failed then
+        local ok, err = pcall(update, ...)
+        if not ok then
+            failed = true
+            wf('LUA_ERROR %s', tostring(err))
+            conclude('LUA_ERROR: ' .. tostring(err))
+        end
+    end
+    return old(...)
+end)
+
+wf('ARMED start_delay=%d poll=%ss director_rva=0x%X hive_lord=cb077af7c7d965d4',
+    C.start_delay, tostring(C.poll_seconds), C.director_rva)
+conclude('ARMED - waiting for a mission so the director exists')
+
+-- Test seam: the roster arithmetic and the self-check are pure functions of a byte
+-- string, so the offline suite drives them exactly.  Nothing here runs unless the
+-- harness sets the global.
+if rawget(_G, '__HIVELORD_ROSTER_EXPOSE_PURE') then
+    _G.__HIVELORD_ROSTER_PURE = {
+        entities_in = entities_in,
+        find_entity = find_entity,
+        reference_overlap = reference_overlap,
+        ptr_at = ptr_at,
+        read = read,
+        scan_slot = scan_slot,
+        hex_of = hex_of,
+        sites_with_disp = sites_with_disp,
+        global_load_before = global_load_before,
+        manager_candidates = manager_candidates,
+        try_manager = try_manager,
+        entity_health = entity_health,
+        HIVE_LORD = HIVE_LORD,
+        MAX_HP = MAX_HP,
+        REFERENCE = REFERENCE,
+    }
+end
+return { installed = true }

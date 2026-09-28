@@ -1,0 +1,39 @@
+# Build output and local artifacts.  The zips in dist/ are produced by
+# scripts/build_addons.py, so they are not tracked; force-add one with
+# `git add -f dist/<name>.zip` if a release really needs to be in the tree.
+/artifacts/
+/build/
+/releases/
+/tools/
+/vendor/
+/.cache/
+/dist/
+*.log
+*.dmp
+*.i64
+*.idb
+*.zip
+*.exe
+*.dll
+*.pdb
+*.obj
+*.lib
+*.exp
+*.ilk
+# Unpacked .patch_N archives and anything the loader writes next to them.
+*.patch_*
+*.gpu_resources
+*.stream
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.vs/
+.vscode/
+.idea/
+.env
+.env.*
+!.env.example
+*.local.*
+Thumbs.db
+.DS_Store
