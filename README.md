@@ -12,7 +12,7 @@ exact, from the health manager (entry 88 of 95)
 1. 需要 **Bingus Shared Loader v18**
 2. 导入 `HiveLord-HP-Health-1.10.0.zip`，启用 Core
 3. Purge → Deploy
-4. 进游戏，找到霸王虫开打；血量出现在屏幕上方中间
+4. 进游戏，找到霸王虫开打；血量出现在屏幕中下方
 
 ## 设置（可选）
 
