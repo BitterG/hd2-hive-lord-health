@@ -61,7 +61,7 @@ PROBE = {
     'allow_sr': {'Application', 'Network', 'GameSession', 'World', 'Gui'},
     'allow_ffi': False,
     'extra': [('hivelord.cfg', 'hivelord.cfg')],
-    'readme': 'README.md',
+    'readme': 'README_PROBE.md',
 }
 
 # -------------------------------------------------------------- target: health
@@ -96,7 +96,7 @@ HEALTH = {
                  'IdString64', 'Material'},
     'allow_ffi': True,
     'extra': [],
-    'readme': 'README_HEALTH.md',
+    'readme': 'README.md',
 }
 
 # -------------------------------------------------------------- target: roster

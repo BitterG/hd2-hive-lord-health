@@ -1,13 +1,31 @@
-﻿# 霸王虫血量侦察包 (Hive Lord HP Probe) 1.1.0
+﻿# 霸王虫精确血量 (Hive Lord Health) 1.10.0
 
-只读侦察工具：把游戏 Lua 接口能读到的东西落盘，用来确认霸王虫的实体和血量字段。
-**它不显示血条**，要血条请用 `HiveLord-HP-Health`。
+在屏幕上显示霸王虫的**精确血量**：随伤害实时下降，死亡时归零。
+
+```
+HIVE LORD  139593 / 150000
+exact, from the health manager (entry 88 of 95)
+```
 
 ## 安装
 
 1. 需要 **Bingus Shared Loader v18**
-2. 导入 `HiveLord-HP-Probe-1.1.0.zip`，启用 Core
+2. 导入 `HiveLord-HP-Health-1.10.0.zip`，启用 Core
 3. Purge → Deploy
-4. 进游戏，把日志发回来
+4. 进游戏，找到霸王虫开打；血量出现在屏幕上方中间
 
-结果写在 `%APPDATA%\Arrowhead\Helldivers2\hivelord_STATUS.txt`。
+## 设置（可选）
+
+配置文件在第一次运行时自动生成：
+
+```
+%APPDATA%\Arrowhead\Helldivers2\hivelord_health.cfg
+```
+
+| 改什么 | 作用 |
+| --- | --- |
+| `hud = false` | 不显示血条，只记日志 |
+| `hud_offset_y = 120` | 血条距屏幕顶部的距离 |
+| `hud_scale = 1.0` | 血条整体大小 |
+
+日志也在同一个目录：`hivelord_health.log`、`hivelord_health_STATUS.txt`。
