@@ -414,10 +414,58 @@ def run_surface_lifecycle_suite(src):
     return checks, detail
 
 
+def run_config_suite(src):
+    """The settings file is created on first run, with the HUD on -- and never overwritten.
+
+    Installing the mod should be enough to see the bar: nobody should have to be told to
+    hand-write a settings file.  The other half matters just as much: a file the user has
+    edited belongs to the user, and a mod that silently rewrites it loses their trust.
+    """
+    checks, detail = {}, {}
+    cfg_rel = 'Arrowhead/Helldivers2/hivelord_health.cfg'
+
+    tmp = new_tmp()
+    try:
+        r = Run(src, tmp)
+        cfg = Path(tmp) / cfg_rel
+        detail['created'] = cfg.exists()
+        checks['the settings file is created on first run'] = cfg.exists()
+        body = cfg.read_text(encoding='utf-8') if cfg.exists() else ''
+        checks['the created file turns the HUD on'] = 'hud = true' in body
+        checks['the created file documents the settings'] = \
+            'hud_scale' in body and 'poll_seconds' in body
+        r.ticks(SHIP + 60)
+        checks['creating the file is reported'] = 'CONFIG created' in r.log()
+        checks['the created file is what takes effect'] = 'hud=true' in r.log()
+        checks['the HUD is drawing with the created defaults'] = \
+            r.g.__gui_texts() != ''
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    tmp = new_tmp()
+    try:
+        cfg = Path(tmp) / cfg_rel
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        mine = '# mine\nhud = false\nhud_scale = 2.5\n'
+        cfg.write_text(mine, encoding='utf-8')
+        r = Run(src, tmp)
+        r.ticks(SHIP + 200)
+        detail['edited'] = cfg.read_text(encoding='utf-8')
+        checks['an existing settings file is left alone'] = \
+            cfg.read_text(encoding='utf-8') == mine
+        checks['the existing settings are the ones applied'] = \
+            'hud=false' in r.log() and 'hud=off' in r.log()
+        checks['the HUD stays off when the file says so'] = r.g.__gui_texts() == ''
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return checks, detail
+
+
 def all_checks(source):
     out = {}
     for fn in (run_suite, run_gate_suite, run_absent_suite, run_surface_suite,
-               run_manager_swap_suite, run_api_refusal_suite, run_surface_lifecycle_suite):
+               run_manager_swap_suite, run_api_refusal_suite, run_surface_lifecycle_suite,
+               run_config_suite):
         part, _ = fn(source)
         out.update(part)
     return out
@@ -542,6 +590,11 @@ MUTATIONS = {
         "            if M.surfaces > C.surface_cap then",
         "            if false then",
     ),
+    # The defaults are written over an existing file, throwing away whatever the user set.
+    'config-overwrites': (
+        "    local f = io.open(path, 'r')\n    if not f then",
+        "    local f = io.open(path, 'r')\n    if true then",
+    ),
 }
 
 
@@ -594,7 +647,7 @@ def main():
         print('FAIL ', k)
     for fn in (run_suite, run_gate_suite, run_absent_suite, run_surface_suite,
                run_manager_swap_suite, run_api_refusal_suite,
-               run_surface_lifecycle_suite):
+               run_surface_lifecycle_suite, run_config_suite):
         _, d = fn(src)
         for k, v in d.items():
             print(f'  {k} = {v}')

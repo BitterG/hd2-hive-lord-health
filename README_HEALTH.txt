@@ -1,7 +1,25 @@
 ========================================================
-霸王虫精确血量 (Hive Lord Health) 1.9.0
+霸王虫精确血量 (Hive Lord Health) 1.10.0
 只读 · 直接读游戏的血量管理器 · 构建锁定
 ========================================================
+
+★ 装上就能用：配置自动创建，HUD 默认开启
+--------------------------------------------------------
+首次运行会**自动创建**配置文件并打开血条，不需要手工建文件：
+
+```
+%APPDATA%\Arrowhead\Helldivers2\hivelord_health.cfg     hud = true
+```
+
+日志会写明是创建了还是读取了现有配置：
+
+```
+CONFIG created with defaults (hud=true): C:\...\hivelord_health.cfg
+CONFIG in effect: hud=false (edit C:\...\hivelord_health.cfg to change)
+```
+
+**已有的配置文件永远不会被覆盖**（那是用户的设置，偷偷改写会失去信任）；
+删掉它就会重新生成一份默认值。关掉血条：把 `hud` 改成 `false`。
 
 ★ 已实机验证：精确血量，死亡时归零
 --------------------------------------------------------
@@ -103,9 +121,10 @@ helldivers2.exe TimeDateStamp 0x6AB382E4  SizeOfImage 0x039E8000  CheckSum 0x00E
 
 安装
 ----
-  1. 导入 HiveLord-HP-Health-1.9.0.zip，启用 Core。
+  1. 导入 HiveLord-HP-Health-1.10.0.zip，启用 Core。
   2. Purge → Deploy → 启动游戏。
   3. 进有霸王虫的任务；用 ping 键**标记**它。
+  配置由 mod 自己创建，默认 `hud = true`，装完直接就有血条。
 
 可选配置 %APPDATA%\Arrowhead\Helldivers2\hivelord_health.cfg
   hud / hud_scale / hud_offset_y / hud_alpha / poll_seconds / diag_seconds /

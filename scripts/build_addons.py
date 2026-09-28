@@ -70,8 +70,8 @@ PROBE = {
 HEALTH = {
     'entry': ROOT / 'Source/mods/hivelord/hivelord_health.lua',
     'resource': 'mods/hivelord/hivelord_health',
-    'display': 'Hive Lord Health 1.9.0',
-    'zip': 'HiveLord-HP-Health-1.9.0.zip',
+    'display': 'Hive Lord Health 1.10.0',
+    'zip': 'HiveLord-HP-Health-1.10.0.zip',
     'guid': '3e9c7a41-5b28-4d0e-9f13-8a2c6b7d4e91',
     'blurb': ('Read-only: the Hive Lord\'s exact current and maximum health, read from the '
               'game\'s health manager on game build 25480438. Verified for that build from '

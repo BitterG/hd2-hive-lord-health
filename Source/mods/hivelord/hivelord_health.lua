@@ -90,11 +90,53 @@ local HIVE_LORD = (function()
 end)()
 local HIVE_LORD_U64 = nil   -- set below, compared as two u32s so nothing goes through a double
 
+local CFG_DIR_REL = '/Arrowhead/Helldivers2/hivelord_health.cfg'
+-- Set by read_config when it had to create the file; reported once the log exists.
+local CONFIG_WRITTEN = nil
+
+-- The settings file is CREATED on first run, with the HUD on, so that installing the mod is
+-- enough: nobody should have to be told to hand-write a file to see the bar.  An existing
+-- file is never touched -- it is the user's, and silently rewriting settings is how a mod
+-- loses trust.
+local DEFAULT_CFG = [[
+# Hive Lord Health - settings.  Created on first run; delete it to get these defaults back.
+# Lines starting with # are ignored, and so is anything after a # on a value line.
+
+# Draw the on-screen bar.  false = read only, nothing is ever drawn.
+hud = true
+
+# Seconds between reads of the health manager.
+poll_seconds = 1
+
+# HUD placement and look.
+hud_scale = 1.0
+hud_offset_y = 120
+hud_alpha = 0.95
+
+# Frames between HUD ticks (6 is about ten times a second at 60 fps).
+draw_every = 6
+
+# Frames to wait before the first read.
+start_delay = 300
+]]
+
 local function read_config()
     local base = os.getenv('APPDATA')
     if not base then return end
-    local f = io.open(base .. '/Arrowhead/Helldivers2/hivelord_health.cfg', 'r')
-    if not f then return end
+    local path = base .. CFG_DIR_REL
+    local f = io.open(path, 'r')
+    if not f then
+        -- Absent (first run): write the documented defaults out, so the file a user finds is
+        -- the file that is actually in effect.  Failure is not fatal -- the defaults in C
+        -- already apply -- so it is reported and ignored.
+        local w = io.open(path, 'w')
+        if w then
+            w:write(DEFAULT_CFG)
+            w:close()
+            CONFIG_WRITTEN = path
+        end
+        return
+    end
     local text = f:read('*a') or ''
     f:close()
     for line in text:gmatch('[^\r\n]+') do
@@ -148,7 +190,7 @@ local M = { frame = 0, clock = 0, head = 'starting', notes = {}, last_line = nil
 
 local function write_status()
     local body = {
-        'hivelord-health-v1.9.0 (read-only, build-pinned)',
+        'hivelord-health-v1.10.0 (read-only, build-pinned)',
         'loader api=' .. tostring(loader_api) .. ' version=' .. tostring(loader_version),
         'log: ' .. LOG_PATH .. ' lines=' .. log_lines .. ' failed=' .. log_fail,
         'CONCLUSION: ' .. M.head,
@@ -770,6 +812,12 @@ if not build then
         .. ' -- the offsets belong to build 25480438 only')
 end
 wf('BUILD %s verified from the PE headers of game.dll and helldivers2.exe', build)
+if CONFIG_WRITTEN then
+    wf('CONFIG created with defaults (hud=%s): %s', tostring(C.hud), CONFIG_WRITTEN)
+else
+    wf('CONFIG in effect: hud=%s (edit %s%s to change)', tostring(C.hud),
+        tostring(os.getenv('APPDATA') or '?'), CFG_DIR_REL)
+end
 wf('ARMED manager_rva=0x%X network_rva=0x%X table_off=0x%X', C.manager_rva, C.network_rva,
     C.table_off)
 head('armed on build ' .. build .. '; waiting for a mission')
