@@ -1,10 +1,8 @@
-﻿========================================================
-霸王虫血量兜底扫描 (Hive Lord HP MemScan) 1.1.0
-只读 · 不调用任何引擎实体接口
-========================================================
+﻿# 霸王虫血量兜底扫描 (Hive Lord HP MemScan) 1.1.0
 
-★ 1.1.0 的关键修复：签名不再用血量"数值"
-------------------------------------------
+> 只读 · 不调用任何引擎实体接口
+
+## 1.1.0 的关键修复：签名不再用血量"数值"
 1.0.x 找的是数值 `150000`。这条路有个**结构性**缺陷：霸王虫一旦掉过血，活体实例里的
 `Health` 就不再是 150000，签名**必然漏掉它**。这才是"扫遍 6.5 GiB 只找到内存映射的
 数据表、永远看不到实体"的真正原因 —— 不是运气差，是签名按构造就不可能命中。
@@ -32,8 +30,7 @@
 数据表算出来的定值，活体读出来必须一模一样；对不上说明偏移漂了，日志会写
 `LIVE_LAYOUT_MISMATCH`。
 
-★ 为什么必须走内存：网络字段读不出总血量（有实测证据）
-------------------------------------------
+## 为什么必须走内存：网络字段读不出总血量（有实测证据）
 读了一整局霸王虫战斗直到它死亡（`hivelord_hp.log`，对象 `goid=624`）：
 
 * 它身上 46 个网络字段里**没有任何一个在死亡时归零**。唯一像血量的是一个
@@ -45,8 +42,7 @@
 **结论：客户端网络层根本没有同步霸王虫的总血量**，只同步了部位比例和损伤掩码。
 所以"血量"只能从客户端自己的组件内存里读 —— 也就是 1.1.0 现在做的事。
 
-★ 1.0.x 的正面成果（保留）
-------------------------------------------
+## 1.0.x 的正面成果（保留）
 ```
 scanned 9858 readable regions, 6548 MiB address space
 match at 0x22c67de49f6: health=150000 zones=38 magic=38
@@ -58,7 +54,6 @@ scan complete: 6598 MiB read, 1 structures found
 * 扫完 6.5 GiB **只找到 1 个**结构 → 零误报。
 * 地址算术证明它命中的是"内存映射的明文数据表"：
   `0x22c67de49f6 − 0x7F49F6 = 0x22c675f0000`，**64 KiB 对齐**。
-
 
 **重要的负面结论**：只找到 1 个结构，说明内存里**没有第二份"每实体血量副本"**。
 也就是说"盯着蓝图等它变"永远不会变 —— 各部位**上限**离线就已知道，
@@ -73,7 +68,6 @@ scan complete: 6598 MiB read, 1 structures found
   并把日志自身健康度写进 STATUS。
 
 这是什么
---------
 这是**备选方案**（Plan B）。主方案（HiveLord-HP-Probe）走游戏自己的实体接口；
 如果那条路走不通（以前有探测 mod 用引擎实体接口把游戏搞崩过两次），就用这个。
 
@@ -81,7 +75,6 @@ scan complete: 6598 MiB read, 1 structures found
 霸王虫的血量结构体，找到之后盯着它，记录数值变化。**只读，不写内存。**
 
 它在找什么
-----------
 `HealthComponent` 结构，偏移量是从游戏自带 typelib + 明文数据表
 `filediver/datalibrary/generated_entities.dl_bin` 逐字节解出来的：
 
@@ -109,11 +102,9 @@ scan complete: 6598 MiB read, 1 structures found
 "实时血量确实读到了"的证据。**
 
 前置要求
---------
 只需要 **Bingus Shared Loader v15 或更新（API 1）**。
 
 安装与运行
-----------
   1. 导入 HiveLord-HP-MemScan-1.1.0.zip，启用 Core。
   2. Purge → Deploy → 启动游戏。
   3. 进任意一局任务（不限定巢都星球），待 10~20 秒让扫描跑完。
@@ -121,7 +112,6 @@ scan complete: 6598 MiB read, 1 structures found
   5. 退出游戏。
 
 产物在哪
---------
   %APPDATA%\Arrowhead\Helldivers2\
 
   hivelord_mem_STATUS.txt  ★先看这个。第一行是结论。
@@ -139,7 +129,6 @@ scan complete: 6598 MiB read, 1 structures found
 反馈时请把 hivelord_mem_STATUS.txt 和 hivelord_mem.log 一起给我。
 
 性能与安全
-----------
 * 每帧最多花 6 毫秒 CPU（可配），单次读取 512 KB，分片推进，
   不会像"一次扫 64 MB"那样把游戏卡死。
 * 断点续扫：崩了重启会从上次的内存区继续，不会重复崩在同一个地方。
@@ -148,7 +137,6 @@ scan complete: 6598 MiB read, 1 structures found
 * 建议先单机（Solo）测试。
 
 配置（可选）
-------------
 默认值即可用。要调就把下面的内容存成
   %APPDATA%\Arrowhead\Helldivers2\hivelord_mem.cfg
 改完重启游戏。
@@ -162,6 +150,5 @@ scan complete: 6598 MiB read, 1 structures found
   hex_dump=256        # 每个命中导出的 hex 字节数
 
 第三方来源
-----------
 结构偏移来自游戏自带 typelib 与本地明文数据表；霸王虫部位血量数值与
 https://helldivers.wiki.gg/wiki/Hive_Lord 完全一致。

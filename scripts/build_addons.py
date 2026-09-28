@@ -61,7 +61,7 @@ PROBE = {
     'allow_sr': {'Application', 'Network', 'GameSession', 'World', 'Gui'},
     'allow_ffi': False,
     'extra': [('hivelord.cfg', 'hivelord.cfg')],
-    'readme': 'README.txt',
+    'readme': 'README.md',
 }
 
 # -------------------------------------------------------------- target: health
@@ -96,7 +96,7 @@ HEALTH = {
                  'IdString64', 'Material'},
     'allow_ffi': True,
     'extra': [],
-    'readme': 'README_HEALTH.txt',
+    'readme': 'README_HEALTH.md',
 }
 
 # -------------------------------------------------------------- target: roster
@@ -126,7 +126,7 @@ ROSTER = {
     'allow_sr': set(),
     'allow_ffi': True,
     'extra': [],
-    'readme': 'README_ROSTER.txt',
+    'readme': 'README_ROSTER.md',
 }
 
 # -------------------------------------------------------------- target: memscan
@@ -153,7 +153,7 @@ MEMSCAN = {
     'allow_sr': set(),
     'allow_ffi': True,
     'extra': [],
-    'readme': 'README_MEMSCAN.txt',
+    'readme': 'README_MEMSCAN.md',
 }
 
 # ------------------------------------------------------------------- target: hp
@@ -187,7 +187,7 @@ HP = {
                  'Vector2', 'Vector3', 'Color'},
     'allow_ffi': False,
     'extra': [('hivelord_hp.cfg', 'hivelord_hp.cfg')],
-    'readme': 'README_HP.txt',
+    'readme': 'README_HP.md',
 }
 
 TARGETS = {'probe': PROBE, 'memscan': MEMSCAN, 'hp': HP, 'roster': ROSTER,
@@ -282,7 +282,7 @@ def build(t):
         'Addon/' + ARCHIVE: archive,
         'Addon/' + ARCHIVE + '.stream': b'',
         'Addon/' + ARCHIVE + '.gpu_resources': b'',
-        'README.txt': (ROOT / t['readme']).read_bytes(),
+        'README.md': (ROOT / t['readme']).read_bytes(),
     }
     for src_name, zip_name in t['extra']:
         files[zip_name] = (ROOT / src_name).read_bytes()

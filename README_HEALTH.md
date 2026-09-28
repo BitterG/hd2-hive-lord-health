@@ -1,10 +1,8 @@
-﻿========================================================
-霸王虫精确血量 (Hive Lord Health) 1.10.0
-只读 · 直接读游戏的血量管理器 · 构建锁定
-========================================================
+﻿# 霸王虫精确血量 (Hive Lord Health) 1.10.0
 
-★ 装上就能用：配置自动创建，HUD 默认开启
---------------------------------------------------------
+> 只读 · 直接读游戏的血量管理器 · 构建锁定
+
+## 装上就能用：配置自动创建，HUD 默认开启
 首次运行会**自动创建**配置文件并打开血条，不需要手工建文件：
 
 ```
@@ -21,8 +19,7 @@ CONFIG in effect: hud=false (edit C:\...\hivelord_health.cfg to change)
 **已有的配置文件永远不会被覆盖**（那是用户的设置，偷偷改写会失去信任）；
 删掉它就会重新生成一份默认值。关掉血条：把 `hud` 改成 `false`。
 
-★ 已实机验证：精确血量，死亡时归零
---------------------------------------------------------
+## 已实机验证：精确血量，死亡时归零
 同一次任务的完整弧线（101 次读数，min=0 max=150000）：
 
 ```
@@ -35,8 +32,7 @@ CONFIG in effect: hud=false (edit C:\...\hivelord_health.cfg to change)
 **"死亡时归零"是它区别于网络同步字段的证据**：那个 6 位字段只会饱和，永远到不了 0。
 `goid/entity/unit` 全程不变，只有条目下标 `j` 会浮动 —— 锁定靠实体标识，不是碰巧的下标。
 
-★ 读法（来自已发布的 Enemy HP 1.1.1）
---------------------------------------------------------
+## 读法（来自已发布的 Enemy HP 1.1.1）
 ```
 hm   = *(game + 0x3326688)                ← 每次轮询都重读，绝不缓存
 n    = u32 at hm+0x1020
@@ -53,8 +49,7 @@ max  : net = *(game+0x346BF98); t = *(net+0xF12B78)
 卡死十一分钟、永远找不到霸王虫。回归测试用"船上管理器 → 任务管理器"的切换钉住它，
 变异 `manager-cached` 会被抓。
 
-★ 绘制：回到"已经被看见过能渲染"的那个调用
---------------------------------------------------------
+## 绘制：回到"已经被看见过能渲染"的那个调用
 **这个项目里唯一被确认渲染成功的调用，是第一个 mod（Reader）用的那个**：屏幕上的字
 **重叠**过 —— 而只有**看得见**的字才会重叠。
 
@@ -88,8 +83,7 @@ Gui.text(gui, 文本, 'core/performance_hud/debug', 字号,
 * **表面总数上限 12**，到顶就自己关闭绘制并写日志 —— 让"累积"在构造上不可能。
 * **只有 `Gui.text` 是必需的**；缺了就拒绝绘制并写明原因。
 
-★ 构建锁定：认错构建就拒绝，什么都不读
---------------------------------------------------------
+## 构建锁定：认错构建就拒绝，什么都不读
 ```
 game.dll        TimeDateStamp 0x6AB3B43F  SizeOfImage 0x04744000  CheckSum 0x00ECDA6F
 helldivers2.exe TimeDateStamp 0x6AB382E4  SizeOfImage 0x039E8000  CheckSum 0x00E48B1D
@@ -99,8 +93,7 @@ helldivers2.exe TimeDateStamp 0x6AB382E4  SizeOfImage 0x039E8000  CheckSum 0x00E
 `REFUSED - unsupported game build: ...`，并且**不读任何结构** —— 用错构建不会报错，
 只会从无关结构里读出一个看起来很合理的数字。
 
-★ 日志
---------------------------------------------------------
+## 日志
   hivelord_health_STATUS.txt   第一行是结论：
       CONCLUSION: Hive Lord 0 / 150000 exact (entry 88 of 169)
   hivelord_health.log
@@ -113,8 +106,7 @@ helldivers2.exe TimeDateStamp 0x6AB382E4  SizeOfImage 0x039E8000  CheckSum 0x00E
       HUD_STATE ...                       绘制走到哪一步，含 `painted=true font=debug-font`
       LUA_ERROR / HUD_ERROR / POLL_ERROR
 
-★ 它**不会**做什么
---------------------------------------------------------
+## 它**不会**做什么
 只用 `GetModuleHandleA` / `GetCurrentProcess` / `ReadProcessMemory`。
 **没有** `VirtualProtect`、没有 `WriteProcessMemory`、不开别的进程、不碰代码页、
 不改游戏数据、不发网络包。
