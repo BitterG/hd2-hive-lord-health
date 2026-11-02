@@ -1,11 +1,11 @@
-"""Build the Hive Lord addons as installable Bingus Shared Loader packages.
+"""Build the Hive Lord addons as installable MDL3 / Mod Manager packages.
 
 Also runs the static checks that only the real, one-shot game environment can
 punish you for -- most importantly "this file may not reference any engine member
 outside the allow-list", because an earlier probe in this workspace walked the
 Network table and crashed the game twice.
 
-Usage:  python HiveLord-HP/scripts/build_addons.py [--target probe|memscan]
+Usage:  python scripts/build_addons.py [--target health|probe|memscan|hp|roster]
 """
 import argparse
 import json
@@ -17,6 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 REPO = ROOT.parent
+sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(REPO / 'BingusSharedLoader/scripts'))
 sys.path.insert(0, str(ROOT / 'tests'))
 
@@ -65,44 +66,41 @@ PROBE = {
 }
 
 # -------------------------------------------------------------- target: health
-# Exact Hive Lord health, by the method of the Enemy HP mod, pinned to one game build and
-# gated on the PE headers of game.dll and helldivers2.exe.  Read-only.
+# Exact Hive Lord health via MDL3 (PUC Lua 5.1) + HD2 Data Hub >= 0.3.0 (HD2Data API 1).
+# Pure Lua 5.1, zero FFI, zero hardcoded build RVAs, read-only.
 HEALTH = {
     'entry': ROOT / 'Source/mods/hivelord/hivelord_health.lua',
     'resource': 'mods/hivelord/hivelord_health',
-    'display': 'Hive Lord Health 1.10.0',
-    'zip': 'HiveLord-HP-Health-1.10.0.zip',
+    'display': '霸王虫血量显示 v2.0.0 (Hive Lord Health)',
+    'option_name': '霸王虫血量显示模组本体 (Hive Lord Health)',
+    'zip': 'HiveLord-HP-Health-2.0.0.zip',
     'guid': '3e9c7a41-5b28-4d0e-9f13-8a2c6b7d4e91',
-    'blurb': ('Read-only: the Hive Lord\'s exact current and maximum health, read from the '
-              'game\'s health manager on game build 25480438. Verified for that build from '
-              'the PE headers of game.dll and helldivers2.exe; refuses on any other build. '
-              'Requires Bingus Shared Loader v15 or newer (API 1). Findings go to '
-              '%APPDATA%\\Arrowhead\\Helldivers2\\ (hivelord_health_STATUS.txt first).'),
+    'blurb': ('需要 MDL3 + HD2 Data Hub (0.3.0+) 前置。实时精确显示霸王虫 Boss 血量条、'
+              '当前/最大生命值与百分比，支持 ESC -> MDL 设置实时预览调节位置与缩放（纯只读）。'),
     'required': [
         ('-- HD2-Addon: mods/hivelord/hivelord_health', 'addon declaration'),
-        ('ReadProcessMemory', 'the only way to reach the manager'),
-        ('supported_build', 'fail-closed build identification from the module headers'),
-        ('TimeDateStamp', 'the header fields the build identity is made of'),
-        ('max_for_type', 'the health-table lookup that gives the maximum'),
+        ('HD2Data', 'HD2 Data Hub API 1 event bridge'),
+        ('enemy/v1/terminids/hive_lord', 'Hive Lord semantic catalog identity'),
+        ('D465D9C7F77A07CB', 'Hive Lord 64-bit entity type hash fallback'),
+        ('ModOptionsMenu', 'MDL3 in-game settings integration'),
+        ('unsubscribe_all', 'clean HD2Data subscription teardown'),
     ],
     'allow_members': {
         'GameSession': set(),
         'Network': set(),
-        'Application': {'worlds', 'main_world'},
+        'Application': {'worlds', 'main_world', 'can_get'},
         'World': {'create_screen_gui', 'destroy_gui'},
-        'Gui': {'text', 'update_text', 'destroy_text', 'resolution', 'material'},
+        'Gui': {'text', 'update_text', 'destroy_text', 'rect', 'update_rect',
+                'destroy_rect', 'resolution', 'material', 'text_extents'},
     },
     'allow_sr': {'Application', 'World', 'Gui', 'Vector2', 'Vector3', 'Color',
                  'IdString64', 'Material'},
-    'allow_ffi': True,
+    'allow_ffi': False,
     'extra': [],
     'readme': 'README.md',
 }
 
 # -------------------------------------------------------------- target: roster
-# Read-only faction-roster reader.  No engine Lua API is used at all and no memory is
-# written; the only imports are GetModuleHandleA, GetCurrentProcess and
-# ReadProcessMemory, all on the current process.
 ROSTER = {
     'entry': ROOT / 'Source/mods/hivelord/hivelord_roster.lua',
     'resource': 'mods/hivelord/hivelord_roster',
@@ -197,12 +195,7 @@ ALIAS = {'GS': 'GameSession', 'Net': 'Network', 'App': 'Application',
 
 
 def strip_lua_comments(src):
-    """Remove Lua comments so the member check sees code, not prose.
-
-    Without this, merely *mentioning* an engine member in a comment trips the
-    allow-list check -- which is a false positive, and a false positive here
-    teaches the wrong lesson about which text is dangerous.
-    """
+    """Remove Lua comments so the member check sees code, not prose."""
     src = re.sub(r'--\[\[.*?\]\]', ' ', src, flags=re.S)
     src = re.sub(r'--[^\n]*', ' ', src)
     return src
@@ -229,7 +222,8 @@ def checks(t, src_override=None):
         check('FFI is used for reading only (no write primitive)',
               'ffi.' in code and not re.search(r'VirtualProtectEx|WriteProcessMemory', code))
     else:
-        check('no FFI use (this addon must stay pure Lua)', 'ffi.' not in code)
+        check('no FFI use (this addon must stay pure Lua 5.1)',
+              'ffi.' not in code and "require('ffi')" not in code and 'require("ffi")' not in code)
     for needle, why in t['required']:
         check(f'contains {why}', needle in src)
 
@@ -252,8 +246,8 @@ def checks(t, src_override=None):
           'call(t[' not in code and 'call(Net[fn]' not in code and 'call(GS[fn]' not in code)
 
     name = t['display']
-    check('manifest Name is pure ASCII with no Windows-illegal characters',
-          name.isascii() and not re.search(r'[\\/:*?"<>|]', name))
+    check('manifest Name has no Windows-illegal filename characters',
+          bool(name.strip()) and not re.search(r'[\\/:*?"<>|]', name))
     return out
 
 
@@ -263,22 +257,23 @@ def build(t):
     if src.startswith(b'-- HD2-Addon:'):
         line, _, rest = src.partition(b'\n')
         assert line.rstrip(b'\r') == marker[:-1], 'declaration does not match resource name'
-        body = marker + rest
+        body = marker + rest.replace(b'\r\n', b'\n')
     else:
-        body = marker + src
+        body = marker + src.replace(b'\r\n', b'\n')
     entry = struct.pack('<II', len(body), 2) + body
     archive = make_archive({resource_hash(t['resource']): entry})
 
     description = t['blurb']
+    option_name = t.get('option_name', 'Core')
     manifest = {
         'Version': 1,
         'Guid': t['guid'],
         'Name': t['display'],
         'Description': description,
-        'Options': [{'Name': 'Core', 'Description': description, 'Include': ['Addon']}],
+        'Options': [{'Name': option_name, 'Description': description, 'Include': ['Addon']}],
     }
     files = {
-        'manifest.json': (json.dumps(manifest, indent=2) + '\n').encode(),
+        'manifest.json': (json.dumps(manifest, indent=2, ensure_ascii=False) + '\n').encode('utf-8'),
         'Addon/' + ARCHIVE: archive,
         'Addon/' + ARCHIVE + '.stream': b'',
         'Addon/' + ARCHIVE + '.gpu_resources': b'',
@@ -318,7 +313,7 @@ def verify_archive(archive, body, resource):
 
 def self_test():
     """Prove the allow-list check can actually fail, and is not fooled by prose."""
-    t = TARGETS['hp']
+    t = TARGETS['health']
     src = t['entry'].read_text(encoding='utf-8')
     label = 'no engine member outside the allow-list is referenced'
     failures = 0
@@ -334,8 +329,8 @@ def self_test():
             failures += 1
 
     result(src, 'the real source passes', False)
-    result(src + '\nlocal _ = Gui.rect(1, 2)\n', 'a real out-of-list call is caught', True)
-    result(src + '\n-- a comment mentioning Gui.rect must not trip it\n',
+    result(src + '\nlocal _ = Gui.bitmap(1, 2)\n', 'a real out-of-list Gui call is caught', True)
+    result(src + '\n-- a comment mentioning Gui.bitmap must not trip it\n',
            'merely mentioning a member in a comment is not a call', False)
     result(src + '\nlocal _ = World.create_particle_effect()\n',
            'a real out-of-list World call is caught', True)
@@ -344,7 +339,7 @@ def self_test():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--target', choices=sorted(TARGETS), default='probe')
+    ap.add_argument('--target', choices=sorted(TARGETS), default='health')
     ap.add_argument('--self-test', action='store_true',
                     help='verify the static checks themselves can fail')
     args = ap.parse_args()
@@ -368,9 +363,6 @@ def main():
 
     out, archive, body = build(t)
     verify_archive(archive, body, t['resource'])
-    # Final gate: the loader's own discovery rules, reimplemented in
-    # tests/loader_accept.py.  A package the loader would not find is a mod that
-    # silently never starts, which is the single most expensive failure mode here.
     names, rejected = loader_accept.scan_file(archive)
     if names != [t['resource']]:
         print(f'\nFAIL  the loader would not discover this package'

@@ -1,132 +1,61 @@
-﻿# 霸王虫精确血量 (Hive Lord Health) 1.10.0  —— 技术细节
+# 霸王虫精确血量显示 (Hive Lord Health) v2.0.0 —— 技术说明
 
-> 只读 · 直接读游戏的血量管理器 · 构建锁定
+> 纯 PUC Lua 5.1 · 基于 MDL3 + HD2 Data Hub (`HD2Data` API 1) · 纯只读零 FFI
 
-## 装上就能用：配置自动创建，HUD 默认开启
-首次运行会**自动创建**配置文件并打开血条，不需要手工建文件：
+## 1. 失效根因分析（v1.10.0 -> v2.0.0）
 
+旧版 v1.10.0 基于旧加载器 Bingus Shared Loader v18 编写，在新版游戏与 **MDL3 (`3.0.0-dev.21-preview`)** 下失效有两个直接原因：
+
+1. **游戏内 Lua VM 已切换为纯 PUC Lua 5.1（无 LuaJIT `ffi`）**：
+   旧版第一阶段强依赖 `require('ffi')` 调用 Win32 `GetModuleHandleA` 与 `ReadProcessMemory`。在 MDL3 的游戏内 Lua 5.1 虚拟机中，`require('ffi')` 会直接抛出异常拒绝加载。
+2. **硬编码 PE 校验与 RVA 已随游戏更新彻底过期**：
+   旧版锁死了旧游戏构建 `25480438` 的 PE 头特征与固定偏移（`game.dll+0x3326688` / `0x346BF98`）。当前游戏版本（如 `25988413` / `26251122`）不仅内存布局已变，且代码页按需解密，直接在 Lua 里裸读固定 RVA 既不兼容也不安全。
+
+## 2. v2.0.0 数据架构：`HD2Data` (API 1) 事件驱动
+
+新版完全移除了 `ffi`、Win32 API 与硬编码偏移，改为通过 **HD2 Data Hub (`>= 0.3.0`)** 提供的公开只读全局接口 `_G.HD2Data` (`api == 1`) 获取霸王虫生命值：
+
+- **实体识别双重校验**：
+  - 优先匹配语义目录标识：`e.semantic_id == 'enemy/v1/terminids/hive_lord'`（以及 `e.entity:is('enemy/v1/terminids/hive_lord')`）。
+  - 兼容回退匹配 64 位类型哈希：`e.type:upper() == 'D465D9C7F77A07CB'`（默认最大生命值 `150,000`）。
+- **关键事件闭环**：
+  - `entity_spawned`：霸王虫生成时立即建档显示 `150,000 / 150,000 (100.0%)`；若检测到刚潜地的残血霸王虫记录，则触发破土继承（`HIVE_LORD_RESURFACE`），避免新实体 ID 导致血条误回满。
+  - `entity_damaged`：实时同步精确 `e.health`、`e.max_health` 与单次伤害 `e.damage`；若玩家中途加入战局错过了 `entity_spawned`，首次命中即刻建档（`mid-fight attach`）。
+  - `entity_died`（**致命一击必订事件**）：在 HD2 Data Hub 内部实现中，当目标生命状态切入死亡（`life >= 2`）时直接走 `if life >= 2` 分支派发 `entity_died`，**不会再触发 `elseif` 分支的 `entity_damaged`**。因此必须订阅 `entity_died` 才能保证最后一击准确归零为 `0 / 150,000 (SLAIN)`。
+  - `mission_started` / `mission_ended` + `HD2Data.mission()` `epoch` 校验：任务切换或返回舰桥时立即清空上一局残留状态。
+- **热重载与掉线自愈**：
+  - 轮询检查每个订阅句柄的 `sub:active()`，若 Hub 热重载替换了 `_G.HD2Data` 表或重置了订阅，自动退订旧句柄并重连全部 5 个事件；`shutdown()` 时完整调用 `sub:unsubscribe()` 并清空全局哨兵 `_G.__HIVELORD_HEALTH`。
+
+## 3. Stingray GUI 渲染安全不变量
+
+参考 `MDL3` 运行时与实战验证过的原生字体 HUD 模式，`hivelord_health.lua` 严格执行以下引擎安全约束：
+
+1. **兼容 Stingray 可调用表构造器 (`is_ctor`)**：
+   引擎中的 `stingray.Vector2`、`stingray.Vector3`、`stingray.Color` 为带有 `__call` 元方法的类表（例如同时提供 `Vector3.x(v)` 方法与 `Vector3(x, y, z)` 构造调用），`type(...)` 返回 `'table'` 而非 `'function'`。绘制前统一通过 `is_ctor` 判定，避免误判 API 缺失。
+2. **`IdString64.from_hex` 绝不跨帧缓存**：
+   Stingray 的 `IdString64` 临时值仅在当前帧有效，跨帧复用会导致引擎底层崩溃或材质失效。每次重建文本图层时均在当帧内即时生成 `IdString64` 并通过 `Application.can_get` 校验 `font` / `material` / `texture` 均已就绪后绑定材质槽位（`88bac99b00000000` 等）。
+3. **原生 UI 字体层 (`M.text_gui`) 与进度条矩形层 (`M.gui`) 分离**：
+   - 底层 `M.gui` 仅承载 4 个常驻矩形句柄（底框、底槽、受击缓冲条、当前血条），通过 `Gui.update_rect` 原地更新，零句柄泄漏。
+   - 顶层 `M.text_gui` 在 `M.gui` 之后创建（确保文字始终浮于血条之上），专门绘制 `MDL3.ui.fonts` 原生游戏字体文本。**绝不对原生字体句柄调用 `Gui.update_text` 或 `Gui.destroy_text`**；仅在文字内容变化时（高频受击下限流 `<= 20 Hz`）在确认 `world` 身份存活（`v == M.text_world`）的前提下以 `World.destroy_gui` 整体替换 `M.text_gui`。
+   - 当 `MDL3.ui.fonts` 尚未发布或世界包装器不具备引用同一性时，自动回退至 `M.gui` 上的 `'core/performance_hud/debug'` 调试字体（最多保留 2 个文本句柄并通过 `Gui.update_text` 原地刷新），且总表面创建次数受 `surface_cap = 12` 硬上限保护。
+4. **CJK 字库探测与 ESC 面板置顶**：
+   - 使用 `Gui.text_extents` 对比 `"霸王虫"` 与 `"???"` 的像素宽度；若相等说明当前游戏语言贴图集不含中文字符，自动降级为纯英文标题 `'HIVE LORD'`。
+   - 当玩家打开 `ESC -> MDL 设置` 调整本模组滑块时，自动开启临时预览并在 `MDL3.panel` 重建后延迟 `0.14s` 重建自身 GUI，使血条始终浮于设置面板正上方以便直观对齐。
+
+## 4. 构建与离线验证
+
+在项目根目录（`hd2-hive-lord-health`）下执行：
+
+```powershell
+# 1. 运行离线模拟测试套件（41 项功能/边界断言）与变异回归测试（9 项变异全捕获）
+python tests/test_health.py
+python tests/test_health.py --all-mutations
+
+# 2. 构建 Stingray .patch_0 归档与可安装模组压缩包（含静态白名单与加载器验收测试）
+python scripts/build_addons.py --self-test
+python scripts/build_addons.py --target health
+
+# 3. 独立校验产出的压缩包结构与字节码加载
+python tests/loader_accept.py --self-test
+python tests/loader_accept.py --zip dist/HiveLord-HP-Health-2.0.0.zip
 ```
-%APPDATA%\Arrowhead\Helldivers2\hivelord_health.cfg     hud = true
-```
-
-日志会写明是创建了还是读取了现有配置：
-
-```
-CONFIG created with defaults (hud=true): C:\...\hivelord_health.cfg
-CONFIG in effect: hud=false (edit C:\...\hivelord_health.cfg to change)
-```
-
-**已有的配置文件永远不会被覆盖**（那是用户的设置，偷偷改写会失去信任）；
-删掉它就会重新生成一份默认值。关掉血条：把 `hud` 改成 `false`。
-
-## 已实机验证：精确血量，死亡时归零
-同一次任务的完整弧线（101 次读数，min=0 max=150000）：
-
-```
-18:43:25 HP goid=4621 entity=1182 unit=4203513 j=93 hp=150000 max=150000 (table)   ← 生成
-18:45:08 HP goid=4621 entity=1182 unit=4203513 j=88 hp=149197 max=150000 (table)
-18:50:31 HP goid=4621 entity=1182 unit=4203513 j=88 hp=24408  max=150000 (table)
-18:50:35 HP goid=4621 entity=1182 unit=4203513 j=88 hp=0      max=150000 (table)   ← 死亡
-```
-
-**"死亡时归零"是它区别于网络同步字段的证据**：那个 6 位字段只会饱和，永远到不了 0。
-`goid/entity/unit` 全程不变，只有条目下标 `j` 会浮动 —— 锁定靠实体标识，不是碰巧的下标。
-
-## 读法（来自已发布的 Enemy HP 1.1.1）
-```
-hm   = *(game + 0x3326688)                ← 每次轮询都重读，绝不缓存
-n    = u32 at hm+0x1020
-arr  = *(hm+0x1048)     recs = *(hm+0x1058)     记录步长 0x1B8，血量在 +0x14
-d    = *(arr + j*8)     描述符 [u64 type][u32 entity][u32 unit][u32 goid][u32 flags]
-hp   = i32 at recs + j*0x1B8 + 0x14      ★ 精确当前血量
-max  : net = *(game+0x346BF98); t = *(net+0xF12B78)
-       key = 描述符的 type；从 t[key % 1002] 起探测，16 字节一槽（u64 键 + u32 索引）
-       max = u32 at t + 0x3EA0 + 索引 * 0x5650
-```
-
-**「每次重读 hm」不是细节，是这条路的命门。** 船上的管理器和任务里的**不是同一个分配**：
-把指针缓存下来，进任务后就一直在读那个已经失效的旧管理器 —— 实机表现为 `entries=1`
-卡死十一分钟、永远找不到霸王虫。回归测试用"船上管理器 → 任务管理器"的切换钉住它，
-变异 `manager-cached` 会被抓。
-
-## 绘制：回到"已经被看见过能渲染"的那个调用
-**这个项目里唯一被确认渲染成功的调用，是第一个 mod（Reader）用的那个**：屏幕上的字
-**重叠**过 —— 而只有**看得见**的字才会重叠。
-
-```lua
-Gui.text(gui, 文本, 'core/performance_hud/debug', 字号,
-         'core/performance_hud/debug', Vector2(x, y), Color(a, g, g, g))
-```
-
-后来我把它换成了参考实现的形状（从游戏全局读字体/材质/alpha id、`IdString64.from_hex`、
-`Gui.material` + `Material.set_*`、`Vector3` 位置）。**那套不是错的（那个 mod 用它跑得很好），
-但它是另一套引擎 API 面**，而这个构建上**被验证过能渲染的只有前者**。四次崩溃全部发生在
-换过去之后：
-
-| 我做的 | 参考实现做的 | 结果 |
-|---|---|---|
-| `read()` 里每次 `ffi.new` | 复用同一个缓冲 | 进任务卡顿 |
-| 只传材质 id，不配置 | 建材质对象 + 4 scalar/vector2/vector4/贴图 | 原生崩溃 |
-| 世界变化时 `World.destroy_gui` | 从不销毁 | 进任务闪退 |
-| 每次变化新建文本对象 | 建一次、`update_text` 原地更新 | 过几分钟崩溃 |
-
-**Reader 之所以从没因为销毁而崩，是因为它那个"句柄身份比较"的 bug 让 `World.destroy_gui`
-一次都没真正执行。** 我"修好"那个比较之后，它才开始真的被调用。
-
-1.9.0 的绘制：
-
-* **Reader 的调用形状**：debug 字体字符串 + `Vector2` + 原参数顺序。
-* **不碰任何材质 API**（`Gui.material` / `Material.set_*` / `IdString64` 全不用）。
-* **不销毁表面**：`World.destroy_gui` 一次都不调用。
-* **文本：优先 `update_text` 原地更新**；没有 `update_text` 时用**真实句柄**销毁重建，
-  且**每个表面最多 2 个文本对象**。
-* **表面总数上限 12**，到顶就自己关闭绘制并写日志 —— 让"累积"在构造上不可能。
-* **只有 `Gui.text` 是必需的**；缺了就拒绝绘制并写明原因。
-
-## 构建锁定：认错构建就拒绝，什么都不读
-```
-game.dll        TimeDateStamp 0x6AB3B43F  SizeOfImage 0x04744000  CheckSum 0x00ECDA6F
-helldivers2.exe TimeDateStamp 0x6AB382E4  SizeOfImage 0x039E8000  CheckSum 0x00E48B1D
-构建 25480438
-```
-六项已在实机文件上离线核对（`work/verify_enemyhp_build.py`）。不匹配时写
-`REFUSED - unsupported game build: ...`，并且**不读任何结构** —— 用错构建不会报错，
-只会从无关结构里读出一个看起来很合理的数字。
-
-## 日志
-  hivelord_health_STATUS.txt   第一行是结论：
-      CONCLUSION: Hive Lord 0 / 150000 exact (entry 88 of 169)
-  hivelord_health.log
-      BUILD / ARMED                       构建校验与启用
-      MANAGER changed 0x.. -> 0x..        世界切换被发现
-      MANAGER not available: ...          并写明是空 / 读不到 / 计数不合理
-      NO_ENTRY entries=N max150000=M      管理器里没有霸王虫的键
-      HP goid=.. j=.. hp=.. max=..        精确读数
-      DIAG / DIAG_DESC                    只在**结构变化**时写；含三个素材 id
-      HUD_STATE ...                       绘制走到哪一步，含 `painted=true font=debug-font`
-      LUA_ERROR / HUD_ERROR / POLL_ERROR
-
-## 它**不会**做什么
-只用 `GetModuleHandleA` / `GetCurrentProcess` / `ReadProcessMemory`。
-**没有** `VirtualProtect`、没有 `WriteProcessMemory`、不开别的进程、不碰代码页、
-不改游戏数据、不发网络包。
-
-安装
-----
-  1. 导入 HiveLord-HP-Health-1.10.0.zip，启用 Core。
-  2. Purge → Deploy → 启动游戏。
-  3. 进有霸王虫的任务；用 ping 键**标记**它。
-  配置由 mod 自己创建，默认 `hud = true`，装完直接就有血条。
-
-可选配置 %APPDATA%\Arrowhead\Helldivers2\hivelord_health.cfg
-  hud / hud_scale / hud_offset_y / hud_alpha / poll_seconds / diag_seconds /
-  by_max_seconds / hold_seconds / surface_cap / start_delay / draw_every
-
-**应急开关**：`hud = false` → 绘制路径完全不执行，**读数照常**。
-
-其它包
-----
-* `Reader`：走网络字段，**不锁定构建**，给同步值（已证明不是精确血量）。
-* `Roster`：走 director 名册判断"在不在"；其 RVA 属于旧构建 24826606，
-  在 25480438 上会被构建闸门拒绝。
-* 本包：血量管理器，精确值，仅适用于 25480438。三个包互不干扰。

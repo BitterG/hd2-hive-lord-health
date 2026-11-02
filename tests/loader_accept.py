@@ -1,21 +1,15 @@
-"""Validate an addon archive against the loader's own discovery rules.
+"""Validate an addon archive against MDL3 / Shared Loader discovery rules.
 
-`BingusSharedLoader/src/discover.lua` is the authority on whether a mod is found:
-it parses each deployed `9ba626afa44a3aa3.patch_<n>`, looks for the Lua resource
-type, walks to the envelope, reads the declaration from the first 256 body bytes
-and finally checks that the MurmurHash64A of the declared name equals the key the
-archive stored.  Anything less than that is a mod that silently never starts.
-
-This reimplements those rules literally -- including the details that are easy to
-get wrong (offset64 gives up when the high word exceeds 2^21 because Lua numbers
-are doubles; an unmarked override hides an older declaration with the same key;
-higher patch numbers win) -- so the packaging path can be proven before a game
-launch is spent on it.
+`MDL3` (`mods.discover`) and `BingusSharedLoader` (`discover.lua`) parse each
+deployed `9ba626afa44a3aa3.patch_<n>`, look for the Lua resource type, walk to
+the envelope, read the `-- HD2-Addon: ...` declaration from the first 256 body
+bytes and verify that the MurmurHash64A of the declared name equals the 8-byte
+key stored in the archive.
 
 Usage:
-    python HiveLord-HP/tests/loader_accept.py --deployed
-    python HiveLord-HP/tests/loader_accept.py --zip <pkg.zip>...
-    python HiveLord-HP/tests/loader_accept.py --self-test
+    python tests/loader_accept.py --deployed
+    python tests/loader_accept.py --zip <pkg.zip>...
+    python tests/loader_accept.py --self-test
 """
 import argparse
 import re
@@ -25,6 +19,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(ROOT.parent / 'BingusSharedLoader/scripts'))
 from archive import resource_hash  # noqa: E402
 
@@ -84,7 +79,7 @@ def scan_file(data):
             continue
         key = row[0:8]
         offset, length = offset64(row, 16), u32(row, 56)
-        if seen.__contains__(key):
+        if key in seen:
             continue
         if offset is None or offset < table_end or length < 8:
             rejected.append(f'row {index}: offset/length unusable')
@@ -134,7 +129,7 @@ def scan_deployed(game=GAME):
 def check_zip(path):
     with zipfile.ZipFile(path) as z:
         members = [n for n in z.namelist()
-                   if re.fullmatch(rf'Addon/{FAMILY}\.patch_\d+', n)]
+                   if re.fullmatch(rf'(?:Addon|.+/){FAMILY}\.patch_\d+|Addon/{FAMILY}\.patch_\d+', n)]
         if not members:
             return [], [f'{path.name}: no {FAMILY}.patch_N inside']
         out, rej = [], []
@@ -147,9 +142,9 @@ def check_zip(path):
 
 def self_test():
     """The check must be able to fail, or it proves nothing."""
-    pkg = ROOT / 'dist/HiveLord-HP-Reader-1.0.10.zip'
+    pkg = ROOT / 'dist/HiveLord-HP-Health-2.0.0.zip'
     if not pkg.exists():
-        print('SKIP: build the hp package first')
+        print('SKIP: build the health package first')
         return 2
     with zipfile.ZipFile(pkg) as z:
         blob = z.read(f'Addon/{FAMILY}.patch_0')
@@ -164,19 +159,22 @@ def self_test():
         if not ok:
             failures += 1
 
+    target_decl = b'-- HD2-Addon: mods/hivelord/hivelord_health'
     expect('the real archive is discovered',
-           blob, ['mods/hivelord/hivelord_hp'], False)
+           blob, ['mods/hivelord/hivelord_health'], False)
 
     # A corrupted declaration must be refused, not silently accepted.
     broken = bytearray(blob)
-    at = broken.find(b'-- HD2-Addon: mods/hivelord/hivelord_hp')
+    at = broken.find(target_decl)
     assert at > 0, 'declaration not found in the archive'
     broken[at + 14:at + 22] = b'XXXXXXXX'
     expect('a mangled declaration is rejected', bytes(broken), [], True)
 
     # A declaration that does not hash to its stored key must be refused.
     other = bytearray(blob)
-    other[at:at + 38] = b'-- HD2-Addon: mods/hivelord/other_name\n'
+    replacement = b'-- HD2-Addon: mods/hivelord/other_health___'
+    assert len(replacement) == len(target_decl)
+    other[at:at + len(target_decl)] = replacement
     expect('a declaration whose hash does not match is rejected', bytes(other), [], True)
 
     # A wrong magic means the whole archive is ignored.
