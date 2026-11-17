@@ -78,8 +78,8 @@ def run_combat_lifecycle_suite(src: str) -> tuple[dict[str, bool], dict[str, obj
         checks["source is pure 7-bit ASCII"] = all(ord(ch) < 128 for ch in src)
 
         r = Run(src, tmp)
-        checks["addon installs and reports v2.0.0"] = (
-            bool(r.result["installed"] is True) and str(r.result["version"]) == "2.0.0"
+        checks["addon installs and reports v2.2.0"] = (
+            bool(r.result["installed"] is True) and str(r.result["version"]) == "2.2.0"
         )
 
         # Ship idle before mission starts
@@ -107,9 +107,14 @@ def run_combat_lifecycle_suite(src: str) -> tuple[dict[str, bool], dict[str, obj
         vis_spawn = str(r.g.__gui_visible_texts())
         detail["spawn_hud"] = vis_spawn.replace("\n", " // ")
         checks["spawn displays 150,000 / 150,000 (100.0%)"] = (
-            "150,000 / 150,000  (100.0%)" in vis_spawn and "LIVE" in vis_spawn
+            "150,000 / 150,000  (100.0%)" in vis_spawn
+            and "LIVE" in vis_spawn
+            and "STERNA" not in vis_spawn
+            and "DORSAL" not in vis_spawn
         )
-        checks["spawn paints 4 solid progress-bar rects"] = int(r.g.__gui_visible_rects()) == 4
+        checks["spawn paints 4 main bar rects (no armor rects)"] = (
+            int(r.g.__gui_visible_rects()) == 4
+        )
         checks["status file reports live 150000 / 150000"] = (
             "HIVE LORD  150000 / 150000  (LIVE)" in r.status()
         )
@@ -415,6 +420,120 @@ def run_config_suite(src: str) -> tuple[dict[str, bool], dict[str, object]]:
     finally:
         shutil.rmtree(tmp2, ignore_errors=True)
 
+    # 3. ESC -> MDL Settings adjustments persist to hivelord_health.cfg and survive game restart
+    #    (even when ModOptionsMenu starts fresh on restart without ModOptionsMenu.values, and even
+    #     when the user exits without shutdown() via Alt+F4 after rapid slider dragging).
+    tmp3 = new_tmp()
+    try:
+        # Simulate a legacy v1.x hivelord_health.cfg already sitting on disk before launch #1
+        cfg_path3 = Path(tmp3) / "Arrowhead" / "Helldivers2" / "hivelord_health.cfg"
+        cfg_path3.write_text(
+            "# Legacy v1 settings\nhud = true\npoll_seconds = 1\nhud_scale = 1.0\n"
+            "hud_offset_y = 120\nhud_alpha = 0.95\ndraw_every = 6\nstart_delay = 300\n",
+            encoding="utf-8",
+        )
+        s1 = Run(src, tmp3, flags="__WITH_MDL3 = true\n")
+        s1.frames(5)
+        s1.lua.execute(
+            """
+            MDL3.panel.visible = true
+            MDL3.panel.page = 'settings'
+            MDL3.panel.builds = 2
+            ModOptionsMenu.set('hivelord_health.hud_preview', true)
+            ModOptionsMenu.set('hivelord_health.hud_position', 2)
+            ModOptionsMenu.set('hivelord_health.hud_scale', 1.20)
+            ModOptionsMenu.set('hivelord_health.hud_offset_x', -150)
+            for _, v in ipairs({ 115, 100, 85, 70, 50 }) do
+                ModOptionsMenu.set('hivelord_health.hud_offset_y', v)
+            end
+            """
+        )
+        # Advance 10 frames (~0.16s) so trailing slider debounce flushes, then drop s1 WITHOUT shutdown()!
+        s1.frames(10)
+        saved_cfg = cfg_path3.read_text(encoding="utf-8")
+        checks["armor option is removed from ModOptionsMenu and hivelord_health.cfg"] = (
+            bool(s1.lua.eval("ModOptionsMenu.get('hivelord_health.hud_armor') == nil"))
+            and "hud_armor" not in saved_cfg
+        )
+        checks["in-game ESC position & slider adjustments save to hivelord_health.cfg"] = (
+            "hud_position = bottom" in saved_cfg
+            and "hud_offset_y = 50" in saved_cfg
+            and "hud_offset_x = -150" in saved_cfg
+            and "hud_scale = 1.20" in saved_cfg
+        )
+
+        # Restart game in a brand-new VM where ModOptionsMenu has zero persisted state of its own
+        s2 = Run(src, tmp3, flags="__WITH_MDL3 = true\n")
+        s2.frames(5)
+        checks["temporary hud_preview toggle does not stay stuck ON after restart"] = (
+            s2.g.__gui_visible_texts() == ""
+            and bool(s2.lua.eval("ModOptionsMenu.get('hivelord_health.hud_preview') == false"))
+        )
+        checks["restarted game syncs saved config back into ModOptionsMenu widgets"] = bool(
+            s2.lua.eval(
+                "ModOptionsMenu.get('hivelord_health.hud_position') == 2 "
+                "and ModOptionsMenu.get('hivelord_health.hud_offset_y') == 50 "
+                "and ModOptionsMenu.get('hivelord_health.hud_offset_x') == -150 "
+                "and math.abs(ModOptionsMenu.get('hivelord_health.hud_scale') - 1.20) < 1e-4"
+            )
+        )
+
+        # Simulate silent stale ModOptionsMenu overwrite before user opens ESC settings -> auto-healed
+        s2.lua.execute(
+            "ModOptionsMenu.__silent_corrupt('hivelord_health.hud_position', 1)\n"
+            "ModOptionsMenu.__silent_corrupt('hivelord_health.hud_offset_y', 135)\n"
+            "MDL3.panel.visible = true\n"
+            "MDL3.panel.page = 'settings'\n"
+        )
+        s2.frames(2)
+        s2.lua.execute("MDL3.panel.visible = false")
+        s2.frames(2)
+        checks["opening ESC settings heals stale ModOptionsMenu state from loaded config"] = bool(
+            s2.lua.eval(
+                "ModOptionsMenu.get('hivelord_health.hud_position') == 2 "
+                "and ModOptionsMenu.get('hivelord_health.hud_offset_y') == 50"
+            )
+        )
+
+        # Spawn Hive Lord in restarted session -> verify actual screen coordinates match saved position!
+        s2.g.__start_mission()
+        s2.g.__spawn_entity(901, "enemy/v1/terminids/hive_lord", "D465D9C7F77A07CB", 150000, 901)
+        s2.frames(5)
+        rect2 = s2.g.__gui_main_bar_rect()
+        # Expected at 1920x1080 with scale=1.20, pos=bottom, offset_y=50, offset_x=-150:
+        #   by = 50 * 1.20 = 60.0 (instead of default top 1080 - 135 = 945!)
+        #   cx = 960 + (-150 * 1.20) = 780.0
+        detail["restarted_bar_y"] = float(rect2["y"]) if rect2 else None
+        detail["restarted_bar_cx"] = float(rect2["cx"]) if rect2 else None
+        checks["restarted game renders health bar at saved bottom/offset_y/offset_x coordinates"] = (
+            rect2 is not None
+            and abs(float(rect2["y"]) - 60.0) < 1.0
+            and abs(float(rect2["cx"]) - 780.0) < 1.0
+            and int(s2.g.__gui_visible_rects()) == 4
+        )
+    finally:
+        shutil.rmtree(tmp3, ignore_errors=True)
+
+    # 4. Manual Notepad edit with UTF-8 BOM + CRLF + quoted values is parsed cleanly without overwrite
+    tmp4 = new_tmp()
+    try:
+        cfg_path4 = Path(tmp4) / "Arrowhead" / "Helldivers2" / "hivelord_health.cfg"
+        bom_cfg = b'\xef\xbb\xbfhud_position = "bottom"\r\nhud_offset_y = 75 ; custom bottom margin\r\nhud_offset_x = 120\r\nhud_armor = false\r\n'
+        cfg_path4.write_bytes(bom_cfg)
+        s4 = Run(src, tmp4, flags="__WITH_MDL3 = true\n")
+        s4.g.__start_mission()
+        s4.g.__spawn_entity(902, "enemy/v1/terminids/hive_lord", "D465D9C7F77A07CB", 150000, 902)
+        s4.frames(5)
+        rect4 = s4.g.__gui_main_bar_rect()
+        checks["UTF-8 BOM + CRLF + quoted manual config loads exact coordinates without overwriting"] = (
+            cfg_path4.read_bytes() == bom_cfg
+            and rect4 is not None
+            and abs(float(rect4["y"]) - 75.0) < 1.0
+            and abs(float(rect4["cx"]) - (960.0 + 120.0)) < 1.0
+        )
+    finally:
+        shutil.rmtree(tmp4, ignore_errors=True)
+
     return checks, detail
 
 
@@ -475,6 +594,14 @@ MUTATIONS: dict[str, tuple[str, str]] = {
     "overwrite-user-cfg": (
         "        local f = io.open(p, 'r')\n        if not f then",
         "        local f = nil\n        if not f then",
+    ),
+    "drop-mom-config-save": (
+        "                    request_config_save(key, immediate)",
+        "                    -- config save omitted",
+    ),
+    "drop-cfg-to-mom-sync": (
+        "        spec.default = to_mom()",
+        "        spec.default = (key == 'hud_position') and 1 or DEFAULTS[key]; cfg_explicit = {}",
     ),
 }
 

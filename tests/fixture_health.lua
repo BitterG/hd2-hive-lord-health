@@ -233,10 +233,6 @@ sr.Gui = {
     end,
 }
 
-rawset(_G, 'stingray', sr)
-rawset(_G, 'update', function() end)
-rawset(_G, 'shutdown', function() end)
-
 -- ---------------------------------------------------------- HD2Data API 1 mock
 local hub_epoch = 0
 local hub_in_mission = false
@@ -245,6 +241,10 @@ local hub_state_name = 'wait'
 local hub_reason = 'mission world not started'
 local hub_build_id = '26251122'
 local gone_entities = {}
+
+rawset(_G, 'stingray', sr)
+rawset(_G, 'update', function() end)
+rawset(_G, 'shutdown', function() end)
 
 local function make_hub(api_ver)
     local subs = {}
@@ -327,6 +327,9 @@ function __install_mdl3_mock(with_fonts, lang)
             mom_vals[id] = val
             for _, cb in ipairs(mom_cbs[id] or {}) do cb(val, id) end
             return true
+        end,
+        __silent_corrupt = function(id, val)
+            mom_vals[id] = val
         end,
         on_change = function(id, cb)
             mom_cbs[id] = mom_cbs[id] or {}
@@ -415,6 +418,7 @@ function __spawn_entity(id, sem, typ, max_hp, net_id)
         D.__emit('entity_spawned', {
             t = hub_now,
             epoch = hub_epoch,
+            mission = hub_epoch,
             entity = ent,
             entity_id = id,
             type = typ,
@@ -433,6 +437,7 @@ function __damage_entity(id, sem, typ, hp, max_hp, dmg, net_id)
         D.__emit('entity_damaged', {
             t = hub_now,
             epoch = hub_epoch,
+            mission = hub_epoch,
             entity = ent,
             entity_id = id,
             type = typ,
@@ -507,6 +512,23 @@ function __gui_live_text_handles()
         end
     end
     return n
+end
+
+function __gui_main_bar_rect()
+    for _, g in pairs(guis) do
+        if g.alive then
+            for _, r in pairs(g.rects) do
+                if r.col and r.col.r == 38 and r.col.g == 42 and r.col.b == 50 and (r.size[1] or 0) > 0 then
+                    local rx = r.pos.x or r.pos[1]
+                    local ry = r.pos.y or r.pos[2]
+                    local rw = r.size.x or r.size[1]
+                    local rh = r.size.y or r.size[2]
+                    return { x = rx, y = ry, w = rw, h = rh, cx = rx + rw * 0.5 }
+                end
+            end
+        end
+    end
+    return nil
 end
 
 function __gui_created() return gui_created end

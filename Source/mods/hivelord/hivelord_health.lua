@@ -1,20 +1,22 @@
 -- HD2-Addon: mods/hivelord/hivelord_health
--- Hive Lord Health 2.0.0 -- Real-time exact Boss Health Bar for Helldivers 2.
+-- Hive Lord Health 2.2.0 -- Real-time exact Boss Health Bar for Helldivers 2.
 -- Adapted for MDL3 (PUC Lua 5.1 game VM) + HD2 Data Hub >= 0.3.0 (HD2Data API 1).
 -- Strictly READ-ONLY: zero FFI, zero process memory writes, zero hardcoded build RVAs.
 
 local ADDON_ID = 'mods/hivelord/hivelord_health'
-local VERSION = '2.0.0'
+local VERSION = '2.2.0'
 local HIVE_LORD_SEMANTIC = 'enemy/v1/terminids/hive_lord'
 local HIVE_LORD_TYPE_HEX = 'D465D9C7F77A07CB'
 local DEFAULT_MAX_HP = 150000
 local DEBUG_FONT_ID = 'core/performance_hud/debug'
+local MAX_RECTS = 4             -- outer frame + trough + damage trail + health fill
+local MAX_TEXTS = 2             -- boss HP title + status subtitle
 
 -- Pure-ASCII UTF-8 string table for Chinese + English UI labels in MDL3 & native font HUD.
 local ZH = {
     cjk_probe = '\233\156\184\231\142\139\232\153\171',
     mod_title = '\233\156\184\231\142\139\232\153\171\232\161\128\233\135\143\230\152\190\231\164\186 (Hive Lord HP)',
-    mod_desc = '\229\159\186\228\186\142 MDL3 + HD2 Data Hub 0.3.0 \231\154\132\233\156\184\231\142\139\232\153\171\229\174\158\230\151\182\231\178\190\231\161\174\232\161\128\233\135\143\230\157\161\230\152\190\231\164\186\230\168\161\231\187\132\239\188\136\231\186\175\229\143\170\232\175\187\239\188\137\227\128\130',
+    mod_desc = '\229\159\186\228\186\142 MDL3 + HD2 Data Hub \231\154\132\233\156\184\231\142\139\232\153\171\229\174\158\230\151\182\231\178\190\231\161\174\232\161\128\233\135\143\230\157\161\230\152\190\231\164\186\230\168\161\231\187\132\239\188\136\231\186\175\229\143\170\232\175\187\239\188\137\227\128\130',
     boss_name = '\233\156\184\231\142\139\232\153\171 HIVE LORD',
     slain = '\229\183\178\229\135\187\230\157\128 SLAIN',
     submerged = '\230\189\156\229\156\176 SUBMERGED',
@@ -30,6 +32,8 @@ local ZH = {
     opt_scale = '\231\149\140\233\157\162\231\188\169\230\148\190 (HUD Scale)',
     opt_offset_y = '\229\158\130\231\155\180\232\190\185\232\183\157 (Vertical Margin)',
     opt_offset_y_desc = '\232\183\157\231\166\187\229\177\143\229\185\149\233\161\182\233\131\168\230\136\150\229\186\149\233\131\168\231\154\132\229\131\143\231\180\160\232\190\185\232\183\157\239\188\136\230\140\137 1080p \229\159\186\229\135\134\232\135\170\233\128\130\229\186\148\231\188\169\230\148\190\239\188\137\227\128\130',
+    opt_offset_x = '\230\176\180\229\185\179\229\129\143\231\167\187 (Horizontal Offset)',
+    opt_offset_x_desc = '\232\183\157\231\166\187\229\177\143\229\185\149\230\176\180\229\185\179\228\184\173\229\191\131\231\154\132\229\131\143\231\180\160\229\129\143\231\167\187\239\188\136\232\180\159\230\149\176\229\129\143\229\183\166\239\188\140\230\173\163\230\149\176\229\129\143\229\143\179\239\188\1400 \228\184\186\229\177\133\228\184\173\239\188\137\227\128\130',
     opt_alpha = '\228\184\141\233\128\143\230\152\142\229\186\166 (Opacity)',
     opt_bar = '\231\187\152\229\136\182\229\174\158\229\191\131\232\161\128\233\135\143\230\157\161 (Solid Progress Bar)',
     opt_death_hold = '\229\135\187\230\157\128\229\144\142\228\191\157\231\149\153\231\167\146\230\149\176 (Death Hold s)',
@@ -47,6 +51,8 @@ local EN = {
     opt_scale = 'HUD Scale',
     opt_offset_y = 'Vertical Margin (px)',
     opt_offset_y_desc = 'Distance from the anchored top or bottom screen edge (scaled from 1080p).',
+    opt_offset_x = 'Horizontal Offset (px)',
+    opt_offset_x_desc = 'Horizontal pixel offset from screen center (negative = left, positive = right, 0 = centered).',
     opt_alpha = 'Opacity',
     opt_bar = 'Draw Solid Progress Bar',
     opt_death_hold = 'Post-Kill Hold (seconds)',
@@ -74,6 +80,7 @@ if io and io.open then
     if app then cands[#cands + 1] = app .. '/Arrowhead/Helldivers2' end
     if loc then cands[#cands + 1] = loc .. '/MDL3' end
     if loc then cands[#cands + 1] = loc .. '/CowboyBingus/Helldivers2/Logs' end
+    cands[#cands + 1] = 'C:/ProgramData/MDL/Helldivers2'
     if tmp then cands[#cands + 1] = tmp end
     cands[#cands + 1] = '.'
     for _, d in ipairs(cands) do
@@ -111,78 +118,192 @@ local DEFAULTS = {
 local C = {}
 for k, v in pairs(DEFAULTS) do C[k] = v end
 local cfg_explicit = {}
+local cfg_path = nil
+local cfg_created = false
 
-local DEFAULT_CFG = [[# Hive Lord Health v2.0.0 settings (MDL3 + HD2 Data Hub 0.3.0)
+local NUM_BOUNDS = {
+    hud_scale = { 0.25, 4.00 },
+    hud_offset_y = { 0, 2000 },
+    hud_offset_x = { -2000, 2000 },
+    hud_alpha = { 0.05, 1.00 },
+    poll_seconds = { 0.05, 10.0 },
+    burrow_hold_seconds = { 0, 600.0 },
+    death_hold_seconds = { 0, 120.0 },
+    surface_cap = { 1, 100 },
+}
+
+local function clamp_num(key, n)
+    local b = NUM_BOUNDS[key]
+    if not b then return n end
+    if n < b[1] then return b[1] end
+    if n > b[2] then return b[2] end
+    return n
+end
+
+local function render_config_text()
+    return string.format([[# Hive Lord Health v%s settings (MDL3 + HD2 Data Hub >= 0.3.0)
 # Edit here or adjust live in-game via ESC -> MDL Settings -> Hive Lord HP.
-# Delete this file to regenerate defaults; existing files are never overwritten.
+# In-game adjustments are saved automatically to this file.
+# Delete this file to regenerate defaults.
 
 # Show the Hive Lord Boss Health Bar on screen (true / false).
-hud = true
+hud = %s
 
 # Anchor position: top (below compass) or bottom (above lower edge).
-hud_position = top
+hud_position = %s
 
-# Scale factor on top of 1080p resolution scaling (e.g. 0.75, 1.0, 1.25).
-hud_scale = 1.00
+# Scale factor on top of 1080p resolution scaling (e.g. 0.75, 1.00, 1.25).
+hud_scale = %.2f
 
 # Distance in 1080p pixels from the anchored top or bottom edge.
-hud_offset_y = 135
+hud_offset_y = %d
+
+# Horizontal offset in 1080p pixels from screen center (negative = left, positive = right, 0 = centered).
+hud_offset_x = %d
 
 # Overall opacity from 0.20 to 1.00.
-hud_alpha = 0.90
+hud_alpha = %.2f
 
 # Draw solid progress bar frame and fill rectangles (true / false).
-hud_bar = true
+hud_bar = %s
 
 # Status / hub diagnostic check interval in seconds.
-poll_seconds = 0.25
+poll_seconds = %.2f
 
 # Seconds to keep last HP visible when the Hive Lord burrows underground.
-burrow_hold_seconds = 60.0
+burrow_hold_seconds = %.1f
 
 # Seconds to keep 0 / 150000 visible after the Hive Lord is slain.
-death_hold_seconds = 5.0
+death_hold_seconds = %.1f
 
 # Verbose per-hit event logging to hivelord_health.log.
-debug = false
-]]
+debug = %s
+]],
+        VERSION,
+        tostring(C.hud == true),
+        (C.hud_position == 'bottom') and 'bottom' or 'top',
+        tonumber(C.hud_scale) or DEFAULTS.hud_scale,
+        math.floor((tonumber(C.hud_offset_y) or DEFAULTS.hud_offset_y) + 0.5),
+        math.floor((tonumber(C.hud_offset_x) or DEFAULTS.hud_offset_x) + 0.5),
+        tonumber(C.hud_alpha) or DEFAULTS.hud_alpha,
+        tostring(C.hud_bar == true),
+        tonumber(C.poll_seconds) or DEFAULTS.poll_seconds,
+        tonumber(C.burrow_hold_seconds) or DEFAULTS.burrow_hold_seconds,
+        tonumber(C.death_hold_seconds) or DEFAULTS.death_hold_seconds,
+        tostring(C.debug == true))
+end
 
-local STRING_KEYS = { hud_position = { top = true, bottom = true } }
+local POS_ALIASES = {
+    top = 'top',
+    ['1'] = 'top',
+    upper = 'top',
+    bottom = 'bottom',
+    ['2'] = 'bottom',
+    lower = 'bottom',
+}
 
-do
-    local app = ok_call(os.getenv, 'APPDATA')
-    local p = (app and (app .. '/Arrowhead/Helldivers2') or outdir)
-    p = p and (p .. '/hivelord_health.cfg') or nil
-    if p and io and io.open then
-        local f = io.open(p, 'r')
-        if not f then
-            local nf = io.open(p, 'w')
-            if nf then
-                pcall(function() nf:write(DEFAULT_CFG); nf:close() end)
-                wf('CONFIG created %s', p)
+local BOOL_ALIASES = {
+    ['true'] = true,
+    ['1'] = true,
+    yes = true,
+    on = true,
+    ['false'] = false,
+    ['0'] = false,
+    no = false,
+    off = false,
+}
+
+local function parse_config_handle(f, mark_explicit)
+    local legacy_v1 = false
+    for raw_l in f:lines() do
+        local l = raw_l:gsub('^\239\187\191', ''):gsub('\r', ''):gsub('[#;].*$', '')
+        local k, raw_v = l:match('^%s*([%w_]+)%s*=%s*(.-)%s*$')
+        if k and raw_v and raw_v ~= '' then
+            if k == 'draw_every' or k == 'start_delay' then
+                legacy_v1 = true
             end
-            f = io.open(p, 'r')
-        end
-        if f then
-            for raw_l in f:lines() do
-                local l = raw_l:gsub('#.*$', '')
-                local k, v = l:match('^%s*([%w_]+)%s*=%s*([%w_%.%-]+)')
-                if k and C[k] ~= nil then
-                    if type(DEFAULTS[k]) == 'boolean' then
-                        if v == 'true' then C[k] = true; cfg_explicit[k] = true
-                        elseif v == 'false' then C[k] = false; cfg_explicit[k] = true end
-                    elseif STRING_KEYS[k] then
-                        local sv = v:lower()
-                        if STRING_KEYS[k][sv] then C[k] = sv; cfg_explicit[k] = true end
-                    elseif type(DEFAULTS[k]) == 'number' then
-                        local n = tonumber(v)
-                        if n and n == n then C[k] = n; cfg_explicit[k] = true end
+            local v = raw_v:match('^"(.*)"$') or raw_v:match("^'(.*)'$") or raw_v
+            if C[k] ~= nil then
+                if type(DEFAULTS[k]) == 'boolean' then
+                    local bv = BOOL_ALIASES[v:lower()]
+                    if bv ~= nil then
+                        C[k] = bv
+                        if mark_explicit then cfg_explicit[k] = true end
+                    end
+                elseif k == 'hud_position' then
+                    local sv = POS_ALIASES[v:lower()]
+                    if sv then
+                        C[k] = sv
+                        if mark_explicit then cfg_explicit[k] = true end
+                    end
+                elseif type(DEFAULTS[k]) == 'number' then
+                    local n = tonumber(v)
+                    if n and n == n and n > -1e9 and n < 1e9 then
+                        C[k] = clamp_num(k, n)
+                        if mark_explicit then cfg_explicit[k] = true end
                     end
                 end
             end
+        end
+    end
+    if legacy_v1 and C.poll_seconds == 1 then
+        C.poll_seconds = DEFAULTS.poll_seconds
+    end
+end
+
+local function config_candidate_dirs()
+    local dirs = {}
+    local seen = {}
+    local function push(d)
+        if type(d) == 'string' and d ~= '' and not seen[d] then
+            seen[d] = true
+            dirs[#dirs + 1] = d
+        end
+    end
+    local app = ok_call(os.getenv, 'APPDATA')
+    if app then push(app .. '/Arrowhead/Helldivers2') end
+    push(outdir)
+    push('C:/ProgramData/MDL/Helldivers2')
+    return dirs
+end
+
+do
+    local dirs = config_candidate_dirs()
+    local p = dirs[1] and (dirs[1] .. '/hivelord_health.cfg') or nil
+    if io and io.open then
+        for _, d in ipairs(dirs) do
+            local cand = d .. '/hivelord_health.cfg'
+            local probe = io.open(cand, 'r')
+            if probe then
+                probe:close()
+                p = cand
+                break
+            end
+        end
+    end
+    if p and io and io.open then
+        local f = io.open(p, 'r')
+        if not f then
+            for _, d in ipairs(dirs) do
+                local cand = d .. '/hivelord_health.cfg'
+                local nf = io.open(cand, 'w')
+                if nf then
+                    p = cand
+                    pcall(function() nf:write(render_config_text()); nf:close() end)
+                    cfg_created = true
+                    wf('CONFIG created %s', p)
+                    break
+                end
+            end
+            f = io.open(p, 'r')
+        end
+        cfg_path = p
+        if f then
+            parse_config_handle(f, not cfg_created)
             f:close()
-            wf('CONFIG loaded %s (hud=%s pos=%s scale=%.2f offset_y=%d alpha=%.2f)',
-                p, tostring(C.hud), tostring(C.hud_position), C.hud_scale, C.hud_offset_y, C.hud_alpha)
+            wf('CONFIG loaded %s (hud=%s pos=%s scale=%.2f offset_y=%d offset_x=%d alpha=%.2f)',
+                p, tostring(C.hud), tostring(C.hud_position),
+                C.hud_scale, C.hud_offset_y, C.hud_offset_x, C.hud_alpha)
         end
     end
 end
@@ -273,13 +394,21 @@ local M = {
     draw_key = nil,
     bar_key = nil,
     font_mode = nil,
-    -- MDL3 ESC menu foreground & live slider preview state:
+    -- MDL3 ESC menu foreground, live slider preview & persistent config sync state:
     live_menu_preview = false,
     fg_sig = nil,
     fg_dirty = false,
     fg_due_at = 0,
     fg_next_at = 0,
     options_bound = false,
+    mom_ref = nil,
+    mom_entries = nil,
+    syncing_mom = false,
+    mom_post_boot_synced = false,
+    was_settings_open = false,
+    cfg_dirty = false,
+    cfg_save_due_at = 0,
+    cfg_last_save_at = -100,
 }
 
 local function format_int(n)
@@ -327,6 +456,10 @@ local function update_status_snapshot()
         M.hub_reason and (' reason=' .. tostring(M.hub_reason)) or '')
     lines[#lines + 1] = string.format('mission: in_mission=%s epoch=%s seen_total=%d live=%d',
         tostring(M.in_mission), tostring(M.epoch), M.ever_seen, M.live_count)
+    lines[#lines + 1] = string.format(
+        'config: hud=%s pos=%s offset_y=%d offset_x=%d scale=%.2f alpha=%.2f path=%s',
+        tostring(C.hud), tostring(C.hud_position),
+        C.hud_offset_y, C.hud_offset_x, C.hud_scale, C.hud_alpha, tostring(cfg_path or 'none'))
     if M.best then
         local r = M.best
         local pct = r.max > 0 and (100.0 * r.hp / r.max) or 0.0
@@ -353,6 +486,55 @@ local function update_status_snapshot()
     write_status_file(head, lines)
 end
 
+local function write_config_now(reason)
+    if not io or not io.open then return false end
+    local targets = {}
+    local seen = {}
+    local function push_target(p)
+        if type(p) == 'string' and p ~= '' and not seen[p] then
+            seen[p] = true
+            targets[#targets + 1] = p
+        end
+    end
+    push_target(cfg_path)
+    for _, d in ipairs(config_candidate_dirs()) do
+        push_target(d .. '/hivelord_health.cfg')
+    end
+    local body = render_config_text()
+    for _, p in ipairs(targets) do
+        local f = io.open(p, 'w')
+        if f then
+            local ok = pcall(function()
+                f:write(body)
+                f:flush()
+                f:close()
+            end)
+            if ok then
+                cfg_path = p
+                M.cfg_dirty = false
+                M.cfg_last_save_at = M.clock
+                wf('CONFIG saved %s (%s: hud=%s pos=%s offset_y=%d offset_x=%d scale=%.2f alpha=%.2f)',
+                    p, tostring(reason or 'update'), tostring(C.hud),
+                    tostring(C.hud_position), C.hud_offset_y, C.hud_offset_x, C.hud_scale, C.hud_alpha)
+                update_status_snapshot()
+                return true
+            end
+        end
+    end
+    wf('CONFIG save_failed (%s)', tostring(reason or 'update'))
+    return false
+end
+
+local function request_config_save(key, immediate)
+    cfg_explicit[key] = true
+    M.cfg_dirty = true
+    if immediate or (M.clock - (M.cfg_last_save_at or -100)) >= 0.10 then
+        write_config_now(key)
+    else
+        M.cfg_save_due_at = M.clock + 0.10
+    end
+end
+
 -- ---------------------------------------------------------- ModOptionsMenu (MDL3)
 local function mdl_settings_open()
     local mdl = rawget(_G, 'MDL3')
@@ -377,25 +559,81 @@ local function find_options_api()
     return nil
 end
 
+local function mom_values_differ(a, b)
+    if type(a) == 'number' and type(b) == 'number' then
+        return math.abs(a - b) > 1e-4
+    end
+    return a ~= b
+end
+
+local function sync_mom_from_config(MOM)
+    if not MOM or type(MOM.set) ~= 'function' or type(M.mom_entries) ~= 'table' then return end
+    M.syncing_mom = true
+    for _, ent in ipairs(M.mom_entries) do
+        if ent.sync_to_mom then
+            local want = ent.to_mom()
+            local cur = (type(MOM.get) == 'function') and ok_call(MOM.get, ent.id) or nil
+            if cur == nil or mom_values_differ(cur, want) then
+                ok_call(MOM.set, ent.id, want)
+            end
+        end
+    end
+    M.syncing_mom = false
+end
+
 local function bind_mod_options()
-    if M.options_bound then return end
     local MOM = find_options_api()
     if not MOM then return end
+    if M.options_bound and M.mom_ref == MOM then return end
     M.options_bound = true
+    M.mom_ref = MOM
+    M.mom_entries = {}
+    M.mom_post_boot_synced = false
 
-    local function reg(key, spec, from_mom, apply_fn, visual_preview)
+    local function reg(key, spec, to_mom, from_mom, apply_fn, persist, immediate, visual_preview)
         local id = 'hivelord_health.' .. key
         spec.mod_id = ADDON_ID
         spec.mod = L('mod_title')
+        spec.default = to_mom()
         local ok = ok_call(MOM.register_option, id, spec)
         if not ok then return end
-        if type(MOM.get) == 'function' and not cfg_explicit[key] then
+
+        if key == 'hud_preview' and not cfg_explicit[key] then
+            if type(MOM.get) == 'function' and type(MOM.set) == 'function'
+                and ok_call(MOM.get, id) == true then
+                M.syncing_mom = true
+                ok_call(MOM.set, id, false)
+                M.syncing_mom = false
+            end
+        elseif cfg_explicit[key] then
+            if type(MOM.set) == 'function' then
+                local want = to_mom()
+                local cur = (type(MOM.get) == 'function') and ok_call(MOM.get, id) or nil
+                if cur == nil or mom_values_differ(cur, want) then
+                    M.syncing_mom = true
+                    ok_call(MOM.set, id, want)
+                    M.syncing_mom = false
+                end
+            end
+        elseif type(MOM.get) == 'function' then
             local saved = ok_call(MOM.get, id)
             if saved ~= nil then apply_fn(from_mom(saved), false) end
         end
+
+        M.mom_entries[#M.mom_entries + 1] = {
+            id = id,
+            key = key,
+            to_mom = to_mom,
+            sync_to_mom = persist == true,
+        }
+
         if type(MOM.on_change) == 'function' then
             ok_call(MOM.on_change, id, function(val)
-                apply_fn(from_mom(val), true)
+                if M.syncing_mom then return end
+                local applied = apply_fn(from_mom(val), true)
+                if applied and persist then
+                    request_config_save(key, immediate)
+                end
                 M.draw_key, M.bar_key = nil, nil
                 if visual_preview then trigger_mdl_live_preview() end
             end)
@@ -404,85 +642,122 @@ local function bind_mod_options()
 
     local id_fn = function(v) return v end
     reg('hud', {
-        type = 'toggle', default = DEFAULTS.hud,
+        type = 'toggle',
         label = L('opt_hud'), description = L('opt_hud_desc'),
-    }, id_fn, function(v, changed)
+    }, function() return C.hud == true end, id_fn, function(v, changed)
         if type(v) == 'boolean' then
             C.hud = v
             if changed then wf('OPTION hud=%s', tostring(v)) end
+            return true
         end
-    end, false)
+        return false
+    end, true, true, false)
 
     reg('hud_preview', {
-        type = 'toggle', default = DEFAULTS.hud_preview,
+        type = 'toggle',
         label = L('opt_preview'), description = L('opt_preview_desc'),
-    }, id_fn, function(v, changed)
+    }, function() return C.hud_preview == true end, id_fn, function(v, changed)
         if type(v) == 'boolean' then
             C.hud_preview = v
             if changed then wf('OPTION hud_preview=%s', tostring(v)) end
+            return true
         end
-    end, true)
+        return false
+    end, false, false, true)
 
     reg('hud_position', {
-        type = 'choice', default = 1,
+        type = 'choice',
         choices = { L('opt_pos_top'), L('opt_pos_bottom') },
         label = L('opt_pos'),
-    }, function(v) return v == 2 and 'bottom' or 'top' end, function(v, changed)
+    }, function() return C.hud_position == 'bottom' and 2 or 1 end,
+    function(v) return v == 2 and 'bottom' or 'top' end, function(v, changed)
         if v == 'top' or v == 'bottom' then
             C.hud_position = v
             if changed then wf('OPTION hud_position=%s', v) end
+            return true
         end
-    end, true)
+        return false
+    end, true, true, true)
 
     reg('hud_scale', {
-        type = 'slider', min = 0.50, max = 2.50, step = 0.05, default = DEFAULTS.hud_scale,
+        type = 'slider', min = 0.50, max = 2.50, step = 0.05,
         label = L('opt_scale'),
-    }, id_fn, function(v, changed)
-        if type(v) == 'number' and v >= 0.5 and v <= 2.5 then
+    }, function() return math.max(0.50, math.min(2.50, tonumber(C.hud_scale) or DEFAULTS.hud_scale)) end,
+    id_fn, function(v, changed)
+        if type(v) == 'number' and v >= 0.25 and v <= 4.0 then
             C.hud_scale = v
             if changed then wf('OPTION hud_scale=%.2f', v) end
+            return true
         end
-    end, true)
+        return false
+    end, true, false, true)
 
     reg('hud_offset_y', {
-        type = 'slider', min = 20, max = 500, step = 5, default = DEFAULTS.hud_offset_y,
+        type = 'slider', min = 10, max = 540, step = 5,
         label = L('opt_offset_y'), description = L('opt_offset_y_desc'),
-    }, id_fn, function(v, changed)
-        if type(v) == 'number' and v >= 20 and v <= 500 then
-            C.hud_offset_y = v
-            if changed then wf('OPTION hud_offset_y=%d', v) end
+    }, function()
+        return math.max(10, math.min(540, math.floor((tonumber(C.hud_offset_y) or DEFAULTS.hud_offset_y) + 0.5)))
+    end, id_fn, function(v, changed)
+        if type(v) == 'number' and v >= 0 and v <= 2000 then
+            C.hud_offset_y = math.floor(v + 0.5)
+            if changed then wf('OPTION hud_offset_y=%d', C.hud_offset_y) end
+            return true
         end
-    end, true)
+        return false
+    end, true, false, true)
+
+    reg('hud_offset_x', {
+        type = 'slider', min = -600, max = 600, step = 10,
+        label = L('opt_offset_x'), description = L('opt_offset_x_desc'),
+    }, function()
+        return math.max(-600, math.min(600, math.floor((tonumber(C.hud_offset_x) or DEFAULTS.hud_offset_x) + 0.5)))
+    end, id_fn, function(v, changed)
+        if type(v) == 'number' and v >= -2000 and v <= 2000 then
+            C.hud_offset_x = math.floor(v + 0.5)
+            if changed then wf('OPTION hud_offset_x=%d', C.hud_offset_x) end
+            return true
+        end
+        return false
+    end, true, false, true)
 
     reg('hud_alpha', {
-        type = 'slider', min = 0.20, max = 1.00, step = 0.05, default = DEFAULTS.hud_alpha,
+        type = 'slider', min = 0.20, max = 1.00, step = 0.05,
         label = L('opt_alpha'),
-    }, id_fn, function(v, changed)
-        if type(v) == 'number' and v >= 0.2 and v <= 1.0 then
+    }, function() return math.max(0.20, math.min(1.00, tonumber(C.hud_alpha) or DEFAULTS.hud_alpha)) end,
+    id_fn, function(v, changed)
+        if type(v) == 'number' and v >= 0.05 and v <= 1.0 then
             C.hud_alpha = v
             if changed then wf('OPTION hud_alpha=%.2f', v) end
+            return true
         end
-    end, true)
+        return false
+    end, true, false, true)
 
     reg('hud_bar', {
-        type = 'toggle', default = DEFAULTS.hud_bar,
+        type = 'toggle',
         label = L('opt_bar'),
-    }, id_fn, function(v, changed)
+    }, function() return C.hud_bar == true end, id_fn, function(v, changed)
         if type(v) == 'boolean' then
             C.hud_bar = v
             if changed then wf('OPTION hud_bar=%s', tostring(v)) end
+            return true
         end
-    end, true)
+        return false
+    end, true, true, true)
 
     reg('death_hold_seconds', {
-        type = 'slider', min = 0, max = 15, step = 1, default = DEFAULTS.death_hold_seconds,
+        type = 'slider', min = 0, max = 15, step = 1,
         label = L('opt_death_hold'),
-    }, id_fn, function(v, changed)
-        if type(v) == 'number' and v >= 0 and v <= 15 then
+    }, function()
+        return math.max(0, math.min(15, math.floor((tonumber(C.death_hold_seconds) or DEFAULTS.death_hold_seconds) + 0.5)))
+    end, id_fn, function(v, changed)
+        if type(v) == 'number' and v >= 0 and v <= 120 then
             C.death_hold_seconds = v
             if changed then wf('OPTION death_hold_seconds=%d', v) end
+            return true
         end
-    end, false)
+        return false
+    end, true, false, false)
 
     wf('MOD_OPTIONS registered with ModOptionsMenu')
 end
@@ -532,11 +807,12 @@ local function reset_records(reason, new_epoch)
 end
 
 local function sync_event_epoch(e)
-    if type(e) == 'table' and e.epoch ~= nil then
-        if M.epoch ~= nil and e.epoch ~= M.epoch then
-            reset_records('event_epoch_change', e.epoch)
+    local ep = type(e) == 'table' and (e.epoch ~= nil and e.epoch or e.mission) or nil
+    if ep ~= nil then
+        if M.epoch ~= nil and ep ~= M.epoch and M.in_mission then
+            reset_records('event_epoch_change', ep)
         else
-            M.epoch = e.epoch
+            M.epoch = ep
         end
     end
     M.in_mission = true
@@ -590,7 +866,7 @@ local function on_entity_spawned(e)
             tostring(id), carry.hp, carry.max, tostring(carry.network_id))
     else
         M.ever_seen = M.ever_seen + 1
-        M.records[id] = {
+        local rec = {
             id = id,
             hp = max_hp,
             max = max_hp,
@@ -609,6 +885,7 @@ local function on_entity_spawned(e)
             burrowed = false,
             invalid_since = nil,
         }
+        M.records[id] = rec
         wf('HIVE_LORD_SPAWN id=%s hp=%d/%d net=%s unit=%s',
             tostring(id), max_hp, max_hp, tostring(e.network_id), tostring(e.unit_id))
     end
@@ -623,15 +900,13 @@ local function on_entity_damaged(e)
     sync_event_epoch(e)
     local id = tonumber(e.entity_id) or tostring(e.entity_id or '0')
     local rec = M.records[id]
-    if not rec and e.network_id ~= nil then
-        for k, r in pairs(M.records) do
-            if r.network_id == e.network_id then
-                M.records[k] = nil
-                rec = r
-                rec.id = id
-                M.records[id] = rec
-                break
-            end
+    if not rec then
+        local old_k, carry = find_carry_record(id, e.network_id)
+        if carry then
+            if old_k ~= id then M.records[old_k] = nil end
+            rec = carry
+            rec.id = id
+            M.records[id] = rec
         end
     end
     local raw_hp = tonumber(e.health)
@@ -720,12 +995,14 @@ end
 local function on_mission_started(e)
     M.in_mission = true
     reset_records('mission_started', type(e) == 'table' and e.epoch or nil)
+    if type(e) == 'table' and e.epoch == nil and e.mission ~= nil then M.epoch = e.mission end
     M.gui_epoch = nil
 end
 
 local function on_mission_ended(e)
     M.in_mission = false
     reset_records('mission_ended', type(e) == 'table' and e.epoch or nil)
+    if type(e) == 'table' and e.epoch == nil and e.mission ~= nil then M.epoch = e.mission end
     M.gui_epoch = nil
 end
 
@@ -824,14 +1101,20 @@ local function hub_tick()
         local ms = ok_call(D.mission)
         if type(ms) == 'table' then
             local in_m = ms.in_mission == true
-            if M.in_mission and not in_m then
+            local was_in_m = M.in_mission
+            if was_in_m and not in_m then
                 M.in_mission = false
                 reset_records('mission_inactive', ms.epoch)
             else
                 M.in_mission = in_m
             end
             if ms.epoch ~= nil and M.epoch ~= nil and ms.epoch ~= M.epoch then
-                reset_records('mission_epoch_poll', ms.epoch)
+                -- Do not wipe a Hive Lord that was just spawned on the transition into mission!
+                if not was_in_m and in_m and next(M.records) ~= nil then
+                    M.epoch = ms.epoch
+                else
+                    reset_records('mission_epoch_poll', ms.epoch)
+                end
             elseif ms.epoch ~= nil then
                 M.epoch = ms.epoch
             end
@@ -1016,11 +1299,11 @@ local function clear_hud(worlds)
         local zpos = sr.Vector3(-20000, -20000, 0)
         local zsize = sr.Vector2(0, 0)
         local zcol = sr.Color(0, 0, 0, 0)
-        for i = 1, 4 do
+        for i = 1, MAX_RECTS do
             if M.rects[i] then pcall(Gui.update_rect, M.gui, M.rects[i], zpos, zsize, zcol) end
         end
     elseif M.rects and type(Gui.destroy_rect) == 'function' then
-        for i = 1, 4 do
+        for i = 1, MAX_RECTS do
             if M.rects[i] then pcall(Gui.destroy_rect, M.gui, M.rects[i]) end
         end
         M.rects, M.rect_creates = nil, 0
@@ -1073,7 +1356,7 @@ local function refresh_foreground_over_mdl_panel(worlds)
         dispose_text_gui(worlds)
         if M.gui ~= nil and M.gui_world ~= nil and world_by_identity(worlds, M.gui_world) then
             if M.rects and Gui and type(Gui.destroy_rect) == 'function' then
-                for i = 1, 4 do if M.rects[i] then pcall(Gui.destroy_rect, M.gui, M.rects[i]) end end
+                for i = 1, MAX_RECTS do if M.rects[i] then pcall(Gui.destroy_rect, M.gui, M.rects[i]) end end
             end
             if World and type(World.destroy_gui) == 'function' then
                 pcall(World.destroy_gui, M.gui_world, M.gui)
@@ -1223,7 +1506,7 @@ local function paint_bar(bx, by, bw, bh, ratio, trail_ratio, dead, a)
         if M.rects and M.bar_key ~= 'hidden' and type(Gui.update_rect) == 'function'
             and is_ctor(sr.Vector3) and is_ctor(sr.Vector2) then
             local zpos, zsz, zcol = sr.Vector3(-20000, -20000, 0), sr.Vector2(0, 0), sr.Color(0, 0, 0, 0)
-            for i = 1, 4 do if M.rects[i] then pcall(Gui.update_rect, M.gui, M.rects[i], zpos, zsz, zcol) end end
+            for i = 1, MAX_RECTS do if M.rects[i] then pcall(Gui.update_rect, M.gui, M.rects[i], zpos, zsz, zcol) end end
             M.bar_key = 'hidden'
         end
         return
@@ -1248,7 +1531,7 @@ local function paint_bar(bx, by, bw, bh, ratio, trail_ratio, dead, a)
             pcall(Gui.update_rect, M.gui, M.rects[slot], pos, sz, col)
             return
         end
-        if (M.rect_creates or 0) >= 4 then return end
+        if (M.rect_creates or 0) >= MAX_RECTS then return end
         local ok, id = pcall(Gui.rect, M.gui, pos, sz, col)
         if ok and id then
             M.rects[slot] = id
@@ -1259,12 +1542,12 @@ local function paint_bar(bx, by, bw, bh, ratio, trail_ratio, dead, a)
     local pad = math.max(2, math.floor(bh * 0.22 + 0.5))
     local bg_a = math.floor(a * 0.78)
     local tr_a = math.floor(a * 0.85)
-    local r, g, b = bar_fill_color(q_ratio / 1000, dead)
+    local cr, cg, cb = bar_fill_color(q_ratio / 1000, dead)
 
     put_rect(1, bx - pad, by - pad, bw + pad * 2, bh + pad * 2, 900, bg_a, 10, 12, 16)
     put_rect(2, bx, by, bw, bh, 901, tr_a, 38, 42, 50)
     put_rect(3, bx, by, bw * (q_trail / 1000), bh, 902, math.floor(a * 0.90), 255, 238, 150)
-    put_rect(4, bx, by, bw * (q_ratio / 1000), bh, 903, a, r, g, b)
+    put_rect(4, bx, by, bw * (q_ratio / 1000), bh, 903, a, cr, cg, cb)
     M.bar_key = bkey
 end
 
@@ -1334,6 +1617,7 @@ local function paint_native_texts(worlds, center_x, title_y, sub_y, sc, r, fonts
         M.font_retry_at = M.clock + 1.5
         return false, nil
     end
+
     M.text_last_rebuild = M.clock
     M.font_mode = 'native'
     return true, txt
@@ -1366,7 +1650,7 @@ local function paint_debug_texts(center_x, bx, title_y, sub_y, sc, r, a)
             end
             M.texts[i] = nil
         end
-        if (M.text_creates or 0) >= 2 then return false end
+        if (M.text_creates or 0) >= MAX_TEXTS then return false end
         local ok, id = pcall(Gui.text, M.gui, str, DEBUG_FONT_ID, size, DEBUG_FONT_ID, pos, col)
         if ok and id then
             M.texts[i] = id
@@ -1378,8 +1662,8 @@ local function paint_debug_texts(center_x, bx, title_y, sub_y, sc, r, a)
 
     local tr, tg, tb = 255, 245, 215
     if r.dead then tr, tg, tb = 255, 110, 100 end
-    local ok1 = put_line(1, txt, x1, title_y, sz1, tr, tg, tb, a)
-    local ok2 = put_line(2, sub, x2, sub_y, sz2, 200, 206, 214, math.floor(a * 0.88))
+    local ok1 = put_line(1, txt, x1, math.floor(title_y + 0.5), sz1, tr, tg, tb, a)
+    local ok2 = put_line(2, sub, x2, math.floor(sub_y + 0.5), sz2, 200, 206, 214, math.floor(a * 0.88))
     M.font_mode = 'debug'
     return (ok1 and ok2) and true or false, txt
 end
@@ -1494,7 +1778,8 @@ local function hud_tick()
     local want_mode = fonts and 'native' or 'debug'
     local sig_txt, sig_sub = format_hud_lines(r, want_mode == 'native' and is_chinese_ui())
     local dkey = string.format('%s\n%s\n%d|%d|%d|%d|%s|%s|%s',
-        sig_txt, sig_sub, math.floor(w_px), math.floor(h_px),
+        sig_txt, sig_sub,
+        math.floor(w_px), math.floor(h_px),
         math.floor(by), a, want_mode, tostring(C.hud_bar), tostring(r.dead))
 
     if dkey ~= M.draw_key then
@@ -1505,7 +1790,7 @@ local function hud_tick()
             return
         end
         local title_y = by + bh + 6 * sc
-        local sub_y = by - 18 * sc
+        local sub_y = by - 19 * sc
         if not C.hud_bar then
             title_y = by + 10 * sc
             sub_y = by - 12 * sc
@@ -1537,7 +1822,29 @@ local function step(dt)
     if not M.active then return end
     local d = (type(dt) == 'number' and dt == dt) and math.max(0, math.min(1, dt)) or 0.016
     M.clock = M.clock + d
-    if not M.options_bound then bind_mod_options() end
+    local cur_mom = find_options_api()
+    if cur_mom and (not M.options_bound or M.mom_ref ~= cur_mom) then
+        M.options_bound = false
+        bind_mod_options()
+    end
+    if M.options_bound and not M.mom_post_boot_synced then
+        local mdl = rawget(_G, 'MDL3')
+        local ui = type(mdl) == 'table' and mdl.ui or nil
+        if (type(ui) == 'table' and ui.state == 'ready') or M.clock >= 2.0 then
+            sync_mom_from_config(M.mom_ref)
+            M.mom_post_boot_synced = true
+        end
+    end
+    local settings_open = mdl_settings_open()
+    if settings_open and not M.was_settings_open then
+        sync_mom_from_config(M.mom_ref)
+    elseif not settings_open and M.was_settings_open and M.cfg_dirty then
+        write_config_now('menu_close')
+    end
+    M.was_settings_open = settings_open
+    if M.cfg_dirty and M.clock >= (M.cfg_save_due_at or 0) then
+        write_config_now('debounced')
+    end
     hub_tick()
     prune_and_select(d)
     hud_tick()
@@ -1555,6 +1862,7 @@ end)
 rawset(_G, 'shutdown', function(...)
     pcall(function()
         M.active = false
+        if M.cfg_dirty then write_config_now('shutdown') end
         unsubscribe_all()
         local App = sr and sr.Application
         local worlds = (App and type(App.worlds) == 'function') and ok_call(App.worlds) or nil
