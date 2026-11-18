@@ -48,8 +48,24 @@ local function check_id64(v)
     end
 end
 
+local vec3_mt = {
+    __tostring = function(v)
+        return string.format('Vector3(%g, %g, %g)', v[1] or 0, v[2] or 0, v[3] or 0)
+    end,
+}
+local quat_mt = {
+    __tostring = function(q)
+        return string.format('Quaternion(%g, %g, %g, %g)', q[1] or 0, q[2] or 0, q[3] or 0, q[4] or 1)
+    end,
+}
 local function make_vec(x, y, z)
     return { x or 0, y or 0, z or 0, x = x or 0, y = y or 0, z = z or 0 }
+end
+local function make_sr_vec3(x, y, z)
+    return setmetatable(make_vec(x, y, z), vec3_mt)
+end
+local function make_sr_quat(x, y, z, w)
+    return setmetatable({ __quat = true, x or 0, y or 0, z or 0, w or 1 }, quat_mt)
 end
 
 local sr = {}
@@ -60,11 +76,11 @@ sr.Vector2 = setmetatable({
     __call = function(_, x, y) return make_vec(x, y, 0) end,
 })
 sr.Vector3 = setmetatable({
-    x = function(v) return v[1] end,
-    y = function(v) return v[2] end,
-    z = function(v) return v[3] end,
+    x = function(v) assert(not v.__quat, 'Vector3.x called on Quaternion'); return v[1] end,
+    y = function(v) assert(not v.__quat, 'Vector3.y called on Quaternion'); return v[2] end,
+    z = function(v) assert(not v.__quat, 'Vector3.z called on Quaternion'); return v[3] end,
 }, {
-    __call = function(_, x, y, z) return make_vec(x, y, z) end,
+    __call = function(_, x, y, z) return make_sr_vec3(x, y, z) end,
 })
 sr.Color = function(a, r, g, b)
     return { a = a, r = r, g = g, b = b }
@@ -242,6 +258,64 @@ local hub_reason = 'mission world not started'
 local hub_build_id = '26251122'
 local gone_entities = {}
 
+-- ------------------------------------------ Network & GameSession (goid) mock
+local SESSION_OBJ = { __session = true }
+local goid_objects = {}
+local goid_queries = 0
+
+local function copy_goid_val(v)
+    if type(v) == 'table' and not getmetatable(v) then
+        local out = {}
+        for k, sv in pairs(v) do out[k] = sv end
+        return out
+    end
+    return v
+end
+
+sr.Network = {
+    game_session = function()
+        return hub_in_mission and SESSION_OBJ or nil
+    end,
+}
+
+sr.GameSession = {
+    in_session = function(sess)
+        return sess == SESSION_OBJ and hub_in_mission
+    end,
+    game_object_exists = function(sess, id)
+        assert(sess == SESSION_OBJ, 'bad session')
+        return type(id) == 'number' and goid_objects[id] ~= nil
+    end,
+    game_object_field_batched = function(sess, id, out)
+        assert(sess == SESSION_OBJ, 'bad session')
+        local obj = assert(goid_objects[id], 'missing goid ' .. tostring(id))
+        goid_queries = goid_queries + 1
+        local res = (type(out) == 'table') and out or {}
+        for k, v in pairs(obj) do
+            res[k] = copy_goid_val(v)
+        end
+        return res
+    end,
+}
+
+local player_pose = { x = 0, y = 0, z = 0, fx = 0, fy = 1, fz = 0 }
+local mock_squad = {}
+local mdl_gui_canvases = {}
+local mdl_gui_errors = {}
+
+local function make_pos_obj(p)
+    if type(p) ~= 'table' or p.x == nil or p.y == nil then return nil end
+    local obj = { x = p.x, y = p.y, z = p.z or 0 }
+    function obj:distance(o)
+        if type(o) ~= 'table' then return nil end
+        local dx, dy, dz = self.x - (o.x or 0), self.y - (o.y or 0), self.z - (o.z or 0)
+        return math.sqrt(dx * dx + dy * dy + dz * dz)
+    end
+    function obj:unpack() return self.x, self.y, self.z end
+    function obj:copy() return { x = self.x, y = self.y, z = self.z } end
+    return obj
+end
+
 rawset(_G, 'stingray', sr)
 rawset(_G, 'update', function() end)
 rawset(_G, 'shutdown', function() end)
@@ -249,12 +323,26 @@ rawset(_G, 'shutdown', function() end)
 local function make_hub(api_ver)
     local subs = {}
     local sub_seq = 0
+    local leases = {}
+    local function lease_ready(name)
+        local prev = leases[name]
+        leases[name] = frame_counter
+        if not prev or (frame_counter - prev) > 180 then
+            -- Realistic HD2Data contract: first call returns nil; active on next frame!
+            return false
+        end
+        return frame_counter > prev
+    end
+
     local D = {
         api = api_ver or 1,
-        version = '0.3.0',
+        version = '0.6.6',
     }
     function D.state()
         return hub_state_name, hub_reason
+    end
+    function D.ready()
+        return hub_state_name == 'ready'
     end
     function D.status()
         return {
@@ -269,6 +357,54 @@ local function make_hub(api_ver)
             in_mission = hub_in_mission,
             epoch = hub_epoch,
             now = hub_now,
+        }
+    end
+    function D.player()
+        if not lease_ready('player') or not hub_in_mission then return nil, 0 end
+        return {
+            peer = '0000000000000001',
+            slot = 0,
+            is_local = true,
+            name = 'Host',
+            alive = true,
+            life = 'alive',
+            health = 100,
+            health_max = 100,
+            position = make_pos_obj(player_pose),
+        }, 0.016
+    end
+    function D.players(detail)
+        if not lease_ready('players') or not hub_in_mission then return nil end
+        local out = {
+            {
+                peer = '0000000000000001',
+                slot = 0,
+                is_local = true,
+                name = 'Host',
+                alive = true,
+                position = make_pos_obj(player_pose),
+            },
+        }
+        for i, m in ipairs(mock_squad) do
+            out[#out + 1] = {
+                peer = string.format('000000000000000%d', i + 1),
+                slot = m.slot or i,
+                is_local = false,
+                name = m.name or ('Mate' .. i),
+                alive = m.alive ~= false,
+                position = make_pos_obj(m),
+            }
+        end
+        return out
+    end
+    function D.aim()
+        if not lease_ready('aim') or not hub_in_mission then return nil end
+        return {
+            avatar = 1,
+            aiming = false,
+            camera = make_pos_obj(player_pose),
+            forward = { x = player_pose.fx, y = player_pose.fy, z = player_pose.fz or 0 },
+            screen = { x = 960, y = 540, depth = 10 },
         }
     end
     function D.on(event, fn, opts)
@@ -309,6 +445,168 @@ if not rawget(_G, '__NO_HUB_AT_BOOT') then
     rawset(_G, 'HD2Data', make_hub(rawget(_G, '__BAD_HUB_API') or 1))
 end
 
+local function make_mdl3_gui_mock(with_fonts)
+    local gui_seq_m = 0
+    local function check_num(v, name)
+        if type(v) ~= 'number' or v ~= v or v == math.huge or v == -math.huge then
+            mdl_gui_errors[#mdl_gui_errors + 1] = 'bad number ' .. tostring(name)
+            error('MDL3.gui: bad number ' .. tostring(name), 2)
+        end
+    end
+    local function check_color(c)
+        if type(c) == 'string' then return end
+        if type(c) ~= 'table' then
+            mdl_gui_errors[#mdl_gui_errors + 1] = 'bad color'
+            error('MDL3.gui: bad color', 2)
+        end
+        local r = c[1] or c.r
+        local g = c[2] or c.g
+        local b = c[3] or c.b
+        local a = c[4] or c.a or 255
+        check_num(r, 'r'); check_num(g, 'g'); check_num(b, 'b'); check_num(a, 'a')
+        return { r = r, g = g, b = b, a = a }
+    end
+
+    return {
+        api = 1,
+        canvas = function(opts)
+            local live_count = 0
+            for _, cv in pairs(mdl_gui_canvases) do
+                if not cv.destroyed then live_count = live_count + 1 end
+            end
+            if live_count >= 16 then
+                mdl_gui_errors[#mdl_gui_errors + 1] = 'canvas limit 16 exceeded'
+                error('MDL3.gui: canvas limit', 2)
+            end
+            gui_seq_m = gui_seq_m + 1
+            local state = {
+                id = gui_seq_m,
+                layer = (opts and opts.layer) or 50,
+                units = (opts and opts.units) or 'reference',
+                visible = true,
+                destroyed = false,
+                rebuilds = 0,
+                updates = 0,
+                items = {},
+                draft = nil,
+                in_frame = false,
+            }
+            mdl_gui_canvases[gui_seq_m] = state
+
+            local function ensure_draft()
+                assert(not state.destroyed and state.in_frame, 'MDL3.gui: not inside begin/finish')
+                assert(#state.draft < 4000, 'MDL3.gui: item limit exceeded')
+            end
+
+            local cv = {}
+            function cv:screen() return { w = 1920, h = 1080, scale = 1, pixel_w = 1920, pixel_h = 1080 } end
+            function cv:measure(str, size)
+                check_num(size, 'size')
+                return #(tostring(str or '')) * size * 0.5
+            end
+            function cv:status()
+                return {
+                    items = #state.items,
+                    font = with_fonts == true,
+                    problem = nil,
+                    missing_image = nil,
+                }
+            end
+            function cv:show(v) state.visible = v ~= false end
+            function cv:clear() state.items = {}; state.rebuilds = state.rebuilds + 1 end
+            function cv:destroy() state.destroyed = true; state.items = {}; state.visible = false end
+            function cv:begin()
+                assert(not state.destroyed, 'destroyed canvas')
+                state.in_frame = true
+                state.draft = {}
+            end
+            function cv:finish()
+                assert(state.in_frame, 'finish without begin')
+                state.in_frame = false
+                local prev = state.items
+                local cur = state.draft
+                state.draft = nil
+                local same_shape = (#prev == #cur)
+                local has_text = false
+                if same_shape then
+                    for i = 1, #cur do
+                        if prev[i].kind ~= cur[i].kind then same_shape = false; break end
+                        if cur[i].kind == 'text' then
+                            has_text = true
+                            if prev[i].text ~= cur[i].text or prev[i].x ~= cur[i].x or prev[i].y ~= cur[i].y then
+                                same_shape = false; break
+                            end
+                        end
+                    end
+                end
+                if #prev == 0 or not same_shape then
+                    if #cur > 0 then state.rebuilds = state.rebuilds + 1 end
+                elseif not has_text then
+                    state.updates = state.updates + 1
+                end
+                state.items = cur
+            end
+            function cv:rect(x, y, w, h, col)
+                ensure_draft()
+                check_num(x, 'x'); check_num(y, 'y'); check_num(w, 'w'); check_num(h, 'h')
+                assert(w > 0 and h > 0, 'rect size > 0')
+                state.draft[#state.draft + 1] = { kind = 'rect', x = x, y = y, w = w, h = h, col = check_color(col) }
+            end
+            function cv:frame(x, y, w, h, thick, col)
+                ensure_draft()
+                check_num(x, 'x'); check_num(y, 'y'); check_num(w, 'w'); check_num(h, 'h'); check_num(thick, 'thick')
+                assert(w > 0 and h > 0 and thick > 0, 'frame dims > 0')
+                state.draft[#state.draft + 1] = { kind = 'frame', x = x, y = y, w = w, h = h, col = check_color(col) }
+            end
+            function cv:line(x1, y1, x2, y2, w, col)
+                ensure_draft()
+                check_num(x1, 'x1'); check_num(y1, 'y1'); check_num(x2, 'x2'); check_num(y2, 'y2')
+                w = w or 2
+                check_num(w, 'width'); assert(w > 0, 'line width > 0')
+                state.draft[#state.draft + 1] = {
+                    kind = 'line', x1 = x1, y1 = y1, x2 = x2, y2 = y2, w = w, col = check_color(col)
+                }
+            end
+            function cv:triangle(x1, y1, x2, y2, x3, y3, col)
+                ensure_draft()
+                check_num(x1, 'x1'); check_num(y1, 'y1')
+                check_num(x2, 'x2'); check_num(y2, 'y2')
+                check_num(x3, 'x3'); check_num(y3, 'y3')
+                state.draft[#state.draft + 1] = {
+                    kind = 'triangle', x1 = x1, y1 = y1, x2 = x2, y2 = y2, x3 = x3, y3 = y3, col = check_color(col)
+                }
+            end
+            function cv:circle(x, y, r, col, copts)
+                ensure_draft()
+                check_num(x, 'x'); check_num(y, 'y'); check_num(r, 'r')
+                assert(r > 0, 'circle radius > 0')
+                if copts and copts.ring ~= nil then
+                    check_num(copts.ring, 'ring')
+                    assert(copts.ring > 0 and copts.ring < r, 'bad ring thickness')
+                end
+                state.draft[#state.draft + 1] = {
+                    kind = 'circle', x = x, y = y, r = r,
+                    ring = copts and copts.ring or nil,
+                    col = check_color(col),
+                }
+            end
+            function cv:text(str, x, y, topts)
+                ensure_draft()
+                assert(type(str) == 'string', 'text string required')
+                check_num(x, 'x'); check_num(y, 'y')
+                local sz = (topts and topts.size) or 20
+                check_num(sz, 'size'); assert(sz > 0, 'text size > 0')
+                local col = check_color((topts and topts.color) or { 255, 255, 255, 255 })
+                state.draft[#state.draft + 1] = {
+                    kind = 'text', text = str, x = x, y = y, size = sz, col = col
+                }
+                return #str * sz * 0.5, sz * 1.25
+            end
+            return cv
+        end,
+    }
+end
+
 -- Optional MDL3 + ModOptionsMenu mock when requested by test pre-script.
 function __install_mdl3_mock(with_fonts, lang)
     local mom_vals = {}
@@ -340,9 +638,10 @@ function __install_mdl3_mock(with_fonts, lang)
     rawset(_G, 'ModOptionsMenu', MOM)
     rawset(_G, 'MDL', { i18n = { code = lang or 'zh-Hans' } })
     rawset(_G, 'MDL3', {
-        version = '3.0.0-dev.21-preview',
+        version = '3.0.0-dev.57-preview',
         options = { revision = 1 },
         panel = { visible = false, page = 'mods', builds = 1 },
+        gui = (not rawget(_G, '__NO_MDL3_GUI')) and make_mdl3_gui_mock(with_fonts) or nil,
         ui = {
             state = 'ready',
             open = false,
@@ -373,12 +672,27 @@ function __install_hub(api_ver)
     rawset(_G, 'HD2Data', make_hub(api_ver or 1))
 end
 
+function __set_player_pose(x, y, z, fx, fy, fz)
+    player_pose.x = x or 0
+    player_pose.y = y or 0
+    player_pose.z = z or 0
+    player_pose.fx = fx or 0
+    player_pose.fy = fy or 1
+    player_pose.fz = fz or 0
+end
+
+function __set_squad(mates)
+    mock_squad = mates or {}
+end
+
 function __start_mission()
     hub_epoch = hub_epoch + 1
     hub_in_mission = true
     hub_state_name = 'ready'
     hub_reason = nil
     gone_entities = {}
+    goid_objects = {}
+    goid_queries = 0
     current_worlds = { MAIN_WORLD, MISSION_WORLD }
     local D = rawget(_G, 'HD2Data')
     if D and D.__emit then
@@ -397,22 +711,25 @@ function __end_mission()
     end
 end
 
-local function make_entity_handle(id, sem, typ, max_hp)
+local function make_entity_handle(id, sem, typ, max_hp, pos)
     local e_epoch = hub_epoch
+    local pos_obj = make_pos_obj(pos)
     return {
         id = id,
         semantic_id = sem,
         type = typ,
         mh = max_hp,
+        pos = pos_obj,
         is_valid = function() return e_epoch == hub_epoch and not gone_entities[id] end,
         max_health = function(self) return self.mh end,
+        position = function(self) return self.pos end,
         is = function(self, s) return self.semantic_id == s end,
     }
 end
 
-function __spawn_entity(id, sem, typ, max_hp, net_id)
+function __spawn_entity(id, sem, typ, max_hp, net_id, pos)
     gone_entities[id] = nil
-    local ent = make_entity_handle(id, sem, typ, max_hp)
+    local ent = make_entity_handle(id, sem, typ, max_hp, pos)
     local D = rawget(_G, 'HD2Data')
     if D and D.__emit then
         D.__emit('entity_spawned', {
@@ -429,9 +746,9 @@ function __spawn_entity(id, sem, typ, max_hp, net_id)
     end
 end
 
-function __damage_entity(id, sem, typ, hp, max_hp, dmg, net_id)
+function __damage_entity(id, sem, typ, hp, max_hp, dmg, net_id, pos)
     gone_entities[id] = nil
-    local ent = make_entity_handle(id, sem, typ, max_hp)
+    local ent = make_entity_handle(id, sem, typ, max_hp, pos)
     local D = rawget(_G, 'HD2Data')
     if D and D.__emit then
         D.__emit('entity_damaged', {
@@ -456,9 +773,9 @@ function __submerge_entity(id)
     gone_entities[id] = true
 end
 
-function __kill_entity(id, sem, typ, max_hp, net_id)
+function __kill_entity(id, sem, typ, max_hp, net_id, pos)
     gone_entities[id] = true
-    local ent = make_entity_handle(id, sem, typ, max_hp)
+    local ent = make_entity_handle(id, sem, typ, max_hp, pos)
     local D = rawget(_G, 'HD2Data')
     if D and D.__emit then
         D.__emit('entity_died', {
@@ -468,11 +785,90 @@ function __kill_entity(id, sem, typ, max_hp, net_id)
             entity_id = id,
             type = typ,
             semantic_id = sem,
+            position = make_pos_obj(pos),
             local_killer = true,
             observed = 'dead_state',
             network_id = net_id,
         })
     end
+end
+
+function __mdl_gui_errors() return #mdl_gui_errors end
+
+function __mdl_gui_canvas_count()
+    local n = 0
+    for _, cv in pairs(mdl_gui_canvases) do
+        if not cv.destroyed then n = n + 1 end
+    end
+    return n
+end
+
+function __mdl_gui_visible_canvases()
+    local n = 0
+    for _, cv in pairs(mdl_gui_canvases) do
+        if not cv.destroyed and cv.visible then n = n + 1 end
+    end
+    return n
+end
+
+function __mdl_gui_canvas_stats(layer)
+    for _, cv in pairs(mdl_gui_canvases) do
+        if not cv.destroyed and cv.layer == layer then
+            local texts = {}
+            for _, it in ipairs(cv.items) do
+                if it.kind == 'text' then texts[#texts + 1] = it.text end
+            end
+            return {
+                rebuilds = cv.rebuilds,
+                updates = cv.updates,
+                visible = cv.visible,
+                items = #cv.items,
+                texts = table.concat(texts, '\n'),
+            }
+        end
+    end
+    return nil
+end
+
+function __mdl_gui_locator_snapshot()
+    local shape_cv, text_cv
+    for _, cv in pairs(mdl_gui_canvases) do
+        if not cv.destroyed then
+            if cv.layer == 62 then shape_cv = cv end
+            if cv.layer == 64 then text_cv = cv end
+        end
+    end
+    if not shape_cv or not shape_cv.visible then return nil end
+    local items = shape_cv.items
+    local radar_bg = items[1]
+    local squad1 = items[11]
+    local squad2 = items[12]
+    local blip = items[18]
+    local rim_arrow = items[19]
+    local ptr = items[22]
+    local texts = {}
+    if text_cv and text_cv.visible then
+        for _, it in ipairs(text_cv.items) do
+            if it.kind == 'text' then texts[#texts + 1] = it.text end
+        end
+    end
+    return {
+        radar_cx = radar_bg and radar_bg.x or nil,
+        radar_cy = radar_bg and radar_bg.y or nil,
+        radar_r = radar_bg and radar_bg.r or nil,
+        blip_x = blip and blip.x or nil,
+        blip_y = blip and blip.y or nil,
+        blip_a = blip and blip.col and blip.col.a or 0,
+        rim_a = rim_arrow and rim_arrow.col and rim_arrow.col.a or 0,
+        squad1_a = squad1 and squad1.col and squad1.col.a or 0,
+        squad2_a = squad2 and squad2.col and squad2.col.a or 0,
+        ptr_tip_x = ptr and ptr.x1 or nil,
+        ptr_tip_y = ptr and ptr.y1 or nil,
+        ptr_a = ptr and ptr.col and ptr.col.a or 0,
+        texts = table.concat(texts, '\n'),
+        shape_rebuilds = shape_cv.rebuilds,
+        shape_updates = shape_cv.updates,
+    }
 end
 
 function __gui_visible_texts()
@@ -540,3 +936,8 @@ function __hub_sub_count()
     local D = rawget(_G, 'HD2Data')
     return (D and D.__active_sub_count) and D.__active_sub_count() or 0
 end
+function __sr_vec3(x, y, z) return make_sr_vec3(x, y, z) end
+function __sr_quat(x, y, z, w) return make_sr_quat(x, y, z, w) end
+function __set_goid_fields(id, fields) goid_objects[id] = fields end
+function __remove_goid(id) goid_objects[id] = nil end
+function __goid_queries() return goid_queries end

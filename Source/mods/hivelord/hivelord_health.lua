@@ -1,10 +1,10 @@
 -- HD2-Addon: mods/hivelord/hivelord_health
--- Hive Lord Health 2.2.0 -- Real-time exact Boss Health Bar for Helldivers 2.
--- Adapted for MDL3 (PUC Lua 5.1 game VM) + HD2 Data Hub >= 0.3.0 (HD2Data API 1).
+-- Hive Lord Health & Locator 2.3.0 -- Real-time exact Boss Health Bar & Tactical Locator for Helldivers 2.
+-- Adapted for MDL3 (PUC Lua 5.1 game VM + MDL3.gui API 1) + HD2 Data Hub >= 0.3.0 (HD2Data API 1).
 -- Strictly READ-ONLY: zero FFI, zero process memory writes, zero hardcoded build RVAs.
 
 local ADDON_ID = 'mods/hivelord/hivelord_health'
-local VERSION = '2.2.0'
+local VERSION = '2.3.0'
 local HIVE_LORD_SEMANTIC = 'enemy/v1/terminids/hive_lord'
 local HIVE_LORD_TYPE_HEX = 'D465D9C7F77A07CB'
 local DEFAULT_MAX_HP = 150000
@@ -15,17 +15,33 @@ local MAX_TEXTS = 2             -- boss HP title + status subtitle
 -- Pure-ASCII UTF-8 string table for Chinese + English UI labels in MDL3 & native font HUD.
 local ZH = {
     cjk_probe = '\233\156\184\231\142\139\232\153\171',
-    mod_title = '\233\156\184\231\142\139\232\153\171\232\161\128\233\135\143\230\152\190\231\164\186 (Hive Lord HP)',
-    mod_desc = '\229\159\186\228\186\142 MDL3 + HD2 Data Hub \231\154\132\233\156\184\231\142\139\232\153\171\229\174\158\230\151\182\231\178\190\231\161\174\232\161\128\233\135\143\230\157\161\230\152\190\231\164\186\230\168\161\231\187\132\239\188\136\231\186\175\229\143\170\232\175\187\239\188\137\227\128\130',
+    mod_title = '\233\156\184\231\142\139\232\153\171\232\161\128\233\135\143\228\184\142\229\174\154\228\189\141 (Hive Lord HP & Locator)',
+    mod_desc = '\229\159\186\228\186\142 MDL3 + HD2 Data Hub \231\154\132\233\156\184\231\142\139\232\153\171\229\174\158\230\151\182\231\178\190\231\161\174\232\161\128\233\135\143\230\157\161\228\184\142\230\150\185\228\189\141\229\174\154\228\189\141\233\155\183\232\190\190\230\168\161\231\187\132\239\188\136\231\186\175\229\143\170\232\175\187\239\188\137\227\128\130',
     boss_name = '\233\156\184\231\142\139\232\153\171 HIVE LORD',
     slain = '\229\183\178\229\135\187\230\157\128 SLAIN',
     submerged = '\230\189\156\229\156\176 SUBMERGED',
     preview_tag = '\233\162\132\232\167\136\230\168\161\229\188\143 PREVIEW',
     active_tag = '\229\174\158\230\151\182\232\191\189\232\184\170 LIVE',
+    loc_radar_title = '\233\156\184\231\142\139\232\153\171\229\174\154\228\189\141',
+    loc_waiting = '\231\173\137\229\190\133\229\174\154\228\189\141\228\191\161\229\143\183...',
+    loc_live = '\229\174\158\230\151\182',
+    loc_last_seen = '\230\156\128\229\144\142\228\189\141\231\189\174',
+    loc_range_tag = '\232\140\131\229\155\180',
+    loc_sec_ago = '\231\167\146\229\137\141',
+    loc_burrow_short = '\230\189\156\229\156\176',
+    dir_f = '\230\173\163\229\137\141',
+    dir_fr = '\229\143\179\229\137\141',
+    dir_r = '\229\143\179\228\190\167',
+    dir_br = '\229\143\179\229\144\142',
+    dir_b = '\230\173\163\229\144\142',
+    dir_bl = '\229\183\166\229\144\142',
+    dir_l = '\229\183\166\228\190\167',
+    dir_fl = '\229\183\166\229\137\141',
+    dir_near = '\230\158\129\232\191\145',
     opt_hud = '\230\152\190\231\164\186\233\156\184\231\142\139\232\153\171\232\161\128\230\157\161 (Show Boss Bar)',
     opt_hud_desc = '\229\156\168\228\187\187\229\138\161\228\184\173\233\156\184\231\142\139\232\153\171\229\135\186\231\142\176\230\136\150\229\143\151\228\188\164\230\151\182\230\152\190\231\164\186\229\174\158\230\151\182\232\161\128\233\135\143\230\157\161\228\184\142\231\178\190\231\161\174\230\149\176\229\128\188\227\128\130',
     opt_preview = '\232\136\176\230\161\165\233\162\132\232\167\136\232\161\128\230\157\161 (Preview HUD)',
-    opt_preview_desc = '\231\171\139\229\141\179\230\152\190\231\164\186\231\164\186\228\190\139\232\161\128\230\157\161\239\188\140\230\150\185\228\190\191\229\156\168\232\136\176\230\161\165\230\136\150\228\187\187\229\138\161\228\184\173\229\174\158\230\151\182\232\176\131\230\149\180\228\189\141\231\189\174\228\184\142\231\188\169\230\148\190\227\128\130',
+    opt_preview_desc = '\231\171\139\229\141\179\230\152\190\231\164\186\231\164\186\228\190\139\232\161\128\230\157\161\228\184\142\229\174\154\228\189\141\233\155\183\232\190\190/\231\174\173\229\164\180\239\188\140\230\150\185\228\190\191\229\156\168\232\136\176\230\161\165\230\136\150\228\187\187\229\138\161\228\184\173\229\174\158\230\151\182\232\176\131\230\149\180\228\189\141\231\189\174\228\184\142\231\188\169\230\148\190\227\128\130',
     opt_pos = '\232\161\128\230\157\161\228\189\141\231\189\174 (Position)',
     opt_pos_top = '\233\161\182\233\131\168\229\177\133\228\184\173 (Top Boss Bar)',
     opt_pos_bottom = '\229\186\149\233\131\168\229\177\133\228\184\173 (Bottom Classic)',
@@ -37,14 +53,55 @@ local ZH = {
     opt_alpha = '\228\184\141\233\128\143\230\152\142\229\186\166 (Opacity)',
     opt_bar = '\231\187\152\229\136\182\229\174\158\229\191\131\232\161\128\233\135\143\230\157\161 (Solid Progress Bar)',
     opt_death_hold = '\229\135\187\230\157\128\229\144\142\228\191\157\231\149\153\231\167\146\230\149\176 (Death Hold s)',
+    opt_loc_radar = '\230\152\190\231\164\186\230\136\152\230\156\175\229\174\154\228\189\141\233\155\183\232\190\190 (Tactical Radar)',
+    opt_loc_radar_desc = '\229\156\168\229\177\143\229\185\149\228\184\138\230\152\190\231\164\186\228\187\165\228\189\160\228\184\186\228\184\173\229\191\131\231\154\132\233\156\184\231\142\139\232\153\171\230\150\185\228\189\141\229\176\143\229\156\176\229\155\190\228\184\142\229\174\158\230\151\182\232\183\157\231\166\187\239\188\136\233\156\128 MDL3 dev.41+\239\188\137\227\128\130',
+    opt_loc_pointer = '\230\152\190\231\164\186\228\184\173\229\191\131\230\150\185\228\189\141\231\174\173\229\164\180 (Direction Pointer)',
+    opt_loc_pointer_desc = '\229\156\168\229\177\143\229\185\149\229\135\134\230\152\159\229\164\150\229\155\180\230\152\190\231\164\186\230\140\135\229\144\145\233\156\184\231\142\139\232\153\171\231\154\132\229\138\168\230\128\129\230\150\185\229\144\145\231\174\173\229\164\180\228\184\142\232\183\157\231\166\187\230\160\135\231\173\190\227\128\130',
+    opt_loc_bar_dist = '\232\161\128\230\157\161\229\137\175\230\160\135\233\162\152\230\152\190\231\164\186\232\183\157\231\166\187 (Distance in HP Bar)',
+    opt_loc_bar_dist_desc = '\229\156\168\233\156\184\231\142\139\232\153\171\232\161\128\233\135\143\230\157\161\228\184\139\230\150\185\231\154\132\231\138\182\230\128\129\230\160\143\229\144\140\230\151\182\230\152\190\231\164\186\229\189\147\229\137\141\232\183\157\231\166\187\228\184\142\231\155\184\229\175\185\230\150\185\228\189\141\227\128\130',
+    opt_loc_squad = '\233\155\183\232\190\190\230\152\190\231\164\186\233\152\159\229\143\139\228\189\141\231\189\174 (Show Squad on Radar)',
+    opt_loc_squad_desc = '\229\156\168\230\136\152\230\156\175\229\174\154\228\189\141\233\155\183\232\190\190\228\184\138\231\148\168\232\147\157\231\130\185\230\160\135\229\135\186\233\152\159\229\143\139\228\189\141\231\189\174\228\189\156\228\184\186\231\169\186\233\151\180\229\143\130\231\133\167\227\128\130',
+    opt_loc_range = '\233\155\183\232\190\190\230\142\162\230\181\139\229\141\138\229\190\132 m (Radar Range)',
+    opt_loc_range_desc = '\230\136\152\230\156\175\233\155\183\232\190\190\229\156\134\229\156\136\232\190\185\231\188\152\229\175\185\229\186\148\231\154\132\229\174\158\233\153\133\232\183\157\231\166\187\239\188\136\231\177\179\239\188\137\239\188\155\232\182\133\229\135\186\230\151\182\232\190\185\231\188\152\230\152\190\231\164\186\230\150\185\229\144\145\228\184\137\232\167\146\230\160\135\227\128\130',
+    opt_loc_radar_scale = '\233\155\183\232\190\190\229\164\167\229\176\143\231\188\169\230\148\190 (Radar Scale)',
+    opt_loc_radar_x = '\233\155\183\232\190\190\230\176\180\229\185\179\229\129\143\231\167\187 (Radar X Offset)',
+    opt_loc_radar_y = '\233\155\183\232\190\190\229\158\130\231\155\180\229\129\143\231\167\187 (Radar Y Offset)',
+    opt_loc_ptr_radius = '\230\150\185\228\189\141\231\174\173\229\164\180\231\142\175\231\187\149\229\141\138\229\190\132 (Pointer Radius)',
+    opt_lang = '\231\149\140\233\157\162\232\175\173\232\168\128 (Language)',
+    opt_lang_desc = '\229\136\135\230\141\162\232\161\128\230\157\161\227\128\129\229\174\154\228\189\141\233\155\183\232\190\190\228\184\142\232\174\190\231\189\174\232\143\156\229\141\149\231\154\132\230\152\190\231\164\186\232\175\173\232\168\128\239\188\136\232\135\170\229\138\168\230\168\161\229\188\143\232\183\159\233\154\143\230\184\184\230\136\143\228\184\142 MDL3 \232\175\173\232\168\128\239\188\137\227\128\130',
+    opt_lang_auto = '\232\135\170\229\138\168\232\183\159\233\154\143\230\184\184\230\136\143 (Auto)',
+    opt_lang_zh = '\228\184\173\230\150\135 (Chinese)',
+    opt_lang_en = '\232\139\177\230\150\135 (English)',
 }
 
 local EN = {
-    mod_title = 'Hive Lord Health Bar',
+    mod_title = 'Hive Lord HP & Locator',
+    mod_desc = 'Real-time Hive Lord exact HP bar & tactical locator radar/pointer via MDL3 + HD2 Data Hub (read-only).',
+    boss_name = 'HIVE LORD',
+    slain = 'SLAIN',
+    submerged = 'SUBMERGED',
+    preview_tag = 'PREVIEW',
+    active_tag = 'LIVE',
+    loc_radar_title = 'HIVE LORD RADAR',
+    loc_waiting = 'LOCATING...',
+    loc_live = 'LIVE',
+    loc_last_seen = 'LAST SEEN',
+    loc_range_tag = 'RANGE',
+    loc_sec_ago = 's ago',
+    loc_burrow_short = 'SUB',
+    dir_f = 'FRONT',
+    dir_fr = 'FR',
+    dir_r = 'RIGHT',
+    dir_br = 'BR',
+    dir_b = 'BEHIND',
+    dir_bl = 'BL',
+    dir_l = 'LEFT',
+    dir_fl = 'FL',
+    dir_near = 'NEAR',
     opt_hud = 'Show Boss Health Bar',
     opt_hud_desc = 'Display real-time exact health bar and HP numbers when a Hive Lord spawns or takes damage.',
     opt_preview = 'Preview HUD on Ship',
-    opt_preview_desc = 'Show a sample Boss Health Bar immediately to tune scale and vertical margin.',
+    opt_preview_desc = 'Show a sample Boss Bar and Locator Radar/Pointer immediately to tune position and scale.',
     opt_pos = 'Bar Anchor Position',
     opt_pos_top = 'Top Center (Boss Bar)',
     opt_pos_bottom = 'Bottom Center (Classic)',
@@ -56,6 +113,25 @@ local EN = {
     opt_alpha = 'Opacity',
     opt_bar = 'Draw Solid Progress Bar',
     opt_death_hold = 'Post-Kill Hold (seconds)',
+    opt_loc_radar = 'Show Tactical Locator Radar',
+    opt_loc_radar_desc = 'Draw a top-down player-relative mini-radar showing Hive Lord position and distance (MDL3 dev.41+).',
+    opt_loc_pointer = 'Show Center Direction Pointer',
+    opt_loc_pointer_desc = 'Draw a dynamic directional arrow and distance badge around screen center pointing to the Hive Lord.',
+    opt_loc_bar_dist = 'Show Distance on Boss Bar',
+    opt_loc_bar_dist_desc = 'Include live distance and relative direction in the Boss Health Bar subtitle.',
+    opt_loc_squad = 'Show Squadmates on Radar',
+    opt_loc_squad_desc = 'Plot live squadmate dots on the tactical radar as spatial reference.',
+    opt_loc_range = 'Radar Range (m)',
+    opt_loc_range_desc = 'Distance in meters corresponding to the outer radar ring; distant targets clamp to the rim.',
+    opt_loc_radar_scale = 'Radar Scale',
+    opt_loc_radar_x = 'Radar X Offset (px)',
+    opt_loc_radar_y = 'Radar Y Offset (px)',
+    opt_loc_ptr_radius = 'Pointer Orbit Radius (px)',
+    opt_lang = 'Display Language',
+    opt_lang_desc = 'Language for Boss Bar, Locator Radar, and Settings (Auto follows game/MDL3 locale).',
+    opt_lang_auto = 'Auto (Follow Game / MDL3)',
+    opt_lang_zh = 'Chinese',
+    opt_lang_en = 'English',
 }
 
 local function is_ctor(v)
@@ -68,6 +144,25 @@ local function ok_call(fn, ...)
     local ok, a, b, c = pcall(fn, ...)
     if ok then return a, b, c end
     return nil
+end
+
+local atan2_native = math.atan2
+local function atan2(y, x)
+    if atan2_native then return atan2_native(y, x) end
+    if x > 0 then return math.atan(y / x) end
+    if x < 0 then
+        if y >= 0 then return math.atan(y / x) + math.pi end
+        return math.atan(y / x) - math.pi
+    end
+    if y > 0 then return math.pi * 0.5 end
+    if y < 0 then return -math.pi * 0.5 end
+    return 0
+end
+
+local function clamp(v, lo, hi)
+    if v < lo then return lo end
+    if v > hi then return hi end
+    return v
 end
 
 -- ---------------------------------------------------------------------- logging
@@ -101,6 +196,7 @@ wf('=== hivelord-health v%s  vm=%s  outdir=%s ===', VERSION, tostring(_VERSION),
 local DEFAULTS = {
     hud = true,
     hud_preview = false,
+    language = 'auto',          -- 'auto' (follow game/MDL3), 'zh', or 'en'
     hud_position = 'top',       -- 'top' (Boss Bar below compass) or 'bottom'
     hud_scale = 1.0,
     hud_offset_y = 135,         -- pixels from top/bottom at 1080p
@@ -108,6 +204,15 @@ local DEFAULTS = {
     hud_alpha = 0.90,
     hud_bar = true,
     hud_native_font = true,
+    locator_radar = true,
+    locator_pointer = true,
+    locator_bar_distance = true,
+    locator_squad = true,
+    locator_range = 250,
+    locator_radar_scale = 1.00,
+    locator_radar_x = 770,      -- offset from screen center (1080p ref px)
+    locator_radar_y = -180,     -- offset from screen center (1080p ref px)
+    locator_pointer_radius = 165,
     poll_seconds = 0.25,
     burrow_hold_seconds = 60.0,
     death_hold_seconds = 5.0,
@@ -126,6 +231,11 @@ local NUM_BOUNDS = {
     hud_offset_y = { 0, 2000 },
     hud_offset_x = { -2000, 2000 },
     hud_alpha = { 0.05, 1.00 },
+    locator_range = { 50, 1000 },
+    locator_radar_scale = { 0.40, 3.00 },
+    locator_radar_x = { -1500, 1500 },
+    locator_radar_y = { -1000, 1000 },
+    locator_pointer_radius = { 40, 500 },
     poll_seconds = { 0.05, 10.0 },
     burrow_hold_seconds = { 0, 600.0 },
     death_hold_seconds = { 0, 120.0 },
@@ -141,13 +251,16 @@ local function clamp_num(key, n)
 end
 
 local function render_config_text()
-    return string.format([[# Hive Lord Health v%s settings (MDL3 + HD2 Data Hub >= 0.3.0)
-# Edit here or adjust live in-game via ESC -> MDL Settings -> Hive Lord HP.
+    return string.format([[# Hive Lord Health & Locator v%s settings (MDL3 + HD2 Data Hub >= 0.3.0)
+# Edit here or adjust live in-game via ESC -> MDL Settings -> Hive Lord HP & Locator.
 # In-game adjustments are saved automatically to this file.
 # Delete this file to regenerate defaults.
 
 # Show the Hive Lord Boss Health Bar on screen (true / false).
 hud = %s
+
+# Display language: auto (follow game/MDL3), zh (Chinese), or en (English).
+language = %s
 
 # Anchor position: top (below compass) or bottom (above lower edge).
 hud_position = %s
@@ -167,6 +280,33 @@ hud_alpha = %.2f
 # Draw solid progress bar frame and fill rectangles (true / false).
 hud_bar = %s
 
+# Show tactical top-down radar overlay via MDL3.gui (true / false).
+locator_radar = %s
+
+# Show screen-center directional arrow + distance via MDL3.gui (true / false).
+locator_pointer = %s
+
+# Include live distance and direction in the Boss Health Bar subtitle (true / false).
+locator_bar_distance = %s
+
+# Plot squadmate positions on the tactical radar (true / false).
+locator_squad = %s
+
+# Tactical radar outer ring radius in meters (50 - 1000).
+locator_range = %d
+
+# Tactical radar size multiplier (0.40 - 3.00).
+locator_radar_scale = %.2f
+
+# Radar horizontal offset in 1080p pixels from screen center.
+locator_radar_x = %d
+
+# Radar vertical offset in 1080p pixels from screen center (negative = upper half).
+locator_radar_y = %d
+
+# Center directional pointer orbit radius in 1080p pixels.
+locator_pointer_radius = %d
+
 # Status / hub diagnostic check interval in seconds.
 poll_seconds = %.2f
 
@@ -181,17 +321,47 @@ debug = %s
 ]],
         VERSION,
         tostring(C.hud == true),
+        (C.language == 'zh' or C.language == 'en') and C.language or 'auto',
         (C.hud_position == 'bottom') and 'bottom' or 'top',
         tonumber(C.hud_scale) or DEFAULTS.hud_scale,
         math.floor((tonumber(C.hud_offset_y) or DEFAULTS.hud_offset_y) + 0.5),
         math.floor((tonumber(C.hud_offset_x) or DEFAULTS.hud_offset_x) + 0.5),
         tonumber(C.hud_alpha) or DEFAULTS.hud_alpha,
         tostring(C.hud_bar == true),
+        tostring(C.locator_radar == true),
+        tostring(C.locator_pointer == true),
+        tostring(C.locator_bar_distance == true),
+        tostring(C.locator_squad == true),
+        math.floor((tonumber(C.locator_range) or DEFAULTS.locator_range) + 0.5),
+        tonumber(C.locator_radar_scale) or DEFAULTS.locator_radar_scale,
+        math.floor((tonumber(C.locator_radar_x) or DEFAULTS.locator_radar_x) + 0.5),
+        math.floor((tonumber(C.locator_radar_y) or DEFAULTS.locator_radar_y) + 0.5),
+        math.floor((tonumber(C.locator_pointer_radius) or DEFAULTS.locator_pointer_radius) + 0.5),
         tonumber(C.poll_seconds) or DEFAULTS.poll_seconds,
         tonumber(C.burrow_hold_seconds) or DEFAULTS.burrow_hold_seconds,
         tonumber(C.death_hold_seconds) or DEFAULTS.death_hold_seconds,
         tostring(C.debug == true))
 end
+
+local LANG_ALIASES = {
+    auto = 'auto',
+    default = 'auto',
+    ['1'] = 'auto',
+    zh = 'zh',
+    cn = 'zh',
+    zhs = 'zh',
+    zht = 'zh',
+    ['zh-cn'] = 'zh',
+    ['zh-hans'] = 'zh',
+    ['zh-hant'] = 'zh',
+    chinese = 'zh',
+    ['2'] = 'zh',
+    en = 'en',
+    ['en-us'] = 'en',
+    ['en-gb'] = 'en',
+    english = 'en',
+    ['3'] = 'en',
+}
 
 local POS_ALIASES = {
     top = 'top',
@@ -228,6 +398,12 @@ local function parse_config_handle(f, mark_explicit)
                     local bv = BOOL_ALIASES[v:lower()]
                     if bv ~= nil then
                         C[k] = bv
+                        if mark_explicit then cfg_explicit[k] = true end
+                    end
+                elseif k == 'language' then
+                    local lv = LANG_ALIASES[v:lower()]
+                    if lv then
+                        C[k] = lv
                         if mark_explicit then cfg_explicit[k] = true end
                     end
                 elseif k == 'hud_position' then
@@ -409,6 +585,20 @@ local M = {
     cfg_dirty = false,
     cfg_save_due_at = 0,
     cfg_last_save_at = -100,
+    -- Tactical Locator (HD2Data positions + GameSession live polling + MDL3.gui API 1):
+    last_fx = nil,
+    last_fy = nil,
+    last_player_pos = nil,
+    next_goid_poll = 0,
+    spatial = nil,
+    loc_gui_ref = nil,
+    loc_shape_canvas = nil,
+    loc_text_canvas = nil,
+    loc_visible = false,
+    loc_text_key = nil,
+    loc_text_last_at = -100,
+    loc_warned_err = false,
+    last_loc_state = nil,
 }
 
 local function format_int(n)
@@ -422,6 +612,8 @@ local function format_int(n)
 end
 
 local function is_chinese_ui()
+    if C.language == 'zh' then return true end
+    if C.language == 'en' then return false end
     local shared = rawget(_G, 'BingusTranslations')
     local tag = type(shared) == 'table' and shared.game_language or nil
     if type(tag) ~= 'string' or tag == '' then
@@ -457,18 +649,29 @@ local function update_status_snapshot()
     lines[#lines + 1] = string.format('mission: in_mission=%s epoch=%s seen_total=%d live=%d',
         tostring(M.in_mission), tostring(M.epoch), M.ever_seen, M.live_count)
     lines[#lines + 1] = string.format(
-        'config: hud=%s pos=%s offset_y=%d offset_x=%d scale=%.2f alpha=%.2f path=%s',
-        tostring(C.hud), tostring(C.hud_position),
-        C.hud_offset_y, C.hud_offset_x, C.hud_scale, C.hud_alpha, tostring(cfg_path or 'none'))
+        'config: hud=%s lang=%s pos=%s offset_y=%d offset_x=%d scale=%.2f alpha=%.2f radar=%s ptr=%s range=%dm path=%s',
+        tostring(C.hud), tostring(C.language or 'auto'), tostring(C.hud_position),
+        C.hud_offset_y, C.hud_offset_x, C.hud_scale, C.hud_alpha,
+        tostring(C.locator_radar), tostring(C.locator_pointer),
+        math.floor((tonumber(C.locator_range) or DEFAULTS.locator_range) + 0.5),
+        tostring(cfg_path or 'none'))
     if M.best then
         local r = M.best
         local pct = r.max > 0 and (100.0 * r.hp / r.max) or 0.0
         local tag = r.dead and 'SLAIN' or (r.burrowed and 'SUBMERGED' or 'LIVE')
-        lines[#lines + 1] = string.format('hive_lord: %d / %d (%.1f%%) [%s] entity_id=%s net_id=%s',
-            r.hp, r.max, pct, tag, tostring(r.id), tostring(r.network_id))
+        local pos_str = r.pos and string.format(' pos=(%.1f,%.1f,%.1f) pos_src=%s',
+            r.pos.x, r.pos.y, r.pos.z, tostring(r.pos_source or '?')) or ''
+        local prim = M.spatial and M.spatial.primary
+        local dist_str = (prim and prim.rec == r and prim.dist)
+            and string.format(' dist=%.1fm deg=%d', prim.dist, prim.deg or 0) or ''
+        lines[#lines + 1] = string.format('hive_lord: %d / %d (%.1f%%) [%s] entity_id=%s net_id=%s%s%s',
+            r.hp, r.max, pct, tag, tostring(r.id), tostring(r.network_id), pos_str, dist_str)
     end
     if M.last_hud then
         lines[#lines + 1] = 'hud: ' .. M.last_hud
+    end
+    if M.last_loc_state then
+        lines[#lines + 1] = 'locator: ' .. M.last_loc_state
     end
 
     local head
@@ -634,7 +837,8 @@ local function bind_mod_options()
                 if applied and persist then
                     request_config_save(key, immediate)
                 end
-                M.draw_key, M.bar_key = nil, nil
+                M.draw_key, M.bar_key, M.loc_text_key = nil, nil, nil
+                M.text_last_rebuild = -100
                 if visual_preview then trigger_mdl_live_preview() end
             end)
         end
@@ -664,6 +868,30 @@ local function bind_mod_options()
         end
         return false
     end, false, false, true)
+
+    reg('language', {
+        type = 'choice',
+        choices = { L('opt_lang_auto'), L('opt_lang_zh'), L('opt_lang_en') },
+        label = L('opt_lang'), description = L('opt_lang_desc'),
+    }, function()
+        if C.language == 'zh' then return 2 end
+        if C.language == 'en' then return 3 end
+        return 1
+    end, function(v)
+        if v == 2 then return 'zh' end
+        if v == 3 then return 'en' end
+        return 'auto'
+    end, function(v, changed)
+        if v == 'auto' or v == 'zh' or v == 'en' then
+            C.language = v
+            if changed then
+                wf('OPTION language=%s', v)
+                update_status_snapshot()
+            end
+            return true
+        end
+        return false
+    end, true, true, true)
 
     reg('hud_position', {
         type = 'choice',
@@ -759,6 +987,49 @@ local function bind_mod_options()
         return false
     end, true, false, false)
 
+    local function reg_bool(key, label_key, desc_key, immediate, visual_preview)
+        local spec = { type = 'toggle', label = L(label_key) }
+        if desc_key then spec.description = L(desc_key) end
+        reg(key, spec, function() return C[key] == true end, id_fn, function(v, changed)
+            if type(v) == 'boolean' then
+                C[key] = v
+                if changed then wf('OPTION %s=%s', key, tostring(v)) end
+                return true
+            end
+            return false
+        end, true, immediate, visual_preview)
+    end
+
+    local function reg_num(key, min_v, max_v, step_v, label_key, desc_key, is_int, visual_preview)
+        local spec = { type = 'slider', min = min_v, max = max_v, step = step_v, label = L(label_key) }
+        if desc_key then spec.description = L(desc_key) end
+        local b = NUM_BOUNDS[key]
+        reg(key, spec, function()
+            local cur = tonumber(C[key]) or DEFAULTS[key]
+            local clamped = clamp(cur, min_v, max_v)
+            return is_int and math.floor(clamped + 0.5) or clamped
+        end, id_fn, function(v, changed)
+            if type(v) == 'number' and (not b or (v >= b[1] and v <= b[2])) then
+                C[key] = is_int and math.floor(v + 0.5) or v
+                if changed then
+                    wf(is_int and ('OPTION %s=%d') or ('OPTION %s=%.2f'), key, C[key])
+                end
+                return true
+            end
+            return false
+        end, true, false, visual_preview)
+    end
+
+    reg_bool('locator_radar', 'opt_loc_radar', 'opt_loc_radar_desc', true, true)
+    reg_bool('locator_pointer', 'opt_loc_pointer', 'opt_loc_pointer_desc', true, true)
+    reg_bool('locator_bar_distance', 'opt_loc_bar_dist', 'opt_loc_bar_dist_desc', true, true)
+    reg_bool('locator_squad', 'opt_loc_squad', 'opt_loc_squad_desc', true, true)
+    reg_num('locator_range', 100, 500, 25, 'opt_loc_range', 'opt_loc_range_desc', true, true)
+    reg_num('locator_radar_scale', 0.60, 2.00, 0.05, 'opt_loc_radar_scale', nil, false, true)
+    reg_num('locator_radar_x', -900, 900, 10, 'opt_loc_radar_x', nil, true, true)
+    reg_num('locator_radar_y', -450, 450, 10, 'opt_loc_radar_y', nil, true, true)
+    reg_num('locator_pointer_radius', 80, 360, 5, 'opt_loc_ptr_radius', nil, true, true)
+
     wf('MOD_OPTIONS registered with ModOptionsMenu')
 end
 
@@ -772,6 +1043,367 @@ local function is_hive_lord(e)
         if ok_call(ent.is, ent, HIVE_LORD_SEMANTIC) == true then return true end
     end
     return false
+end
+
+local function read_pos_xyz(p)
+    if type(p) ~= 'table' then return nil end
+    local x, y, z = tonumber(p.x), tonumber(p.y), tonumber(p.z)
+    if not (x and y and z) then return nil end
+    if x ~= x or y ~= y or z ~= z then return nil end
+    if math.abs(x) > 100000 or math.abs(y) > 100000 or math.abs(z) > 100000 then return nil end
+    return { x = x, y = y, z = z }
+end
+
+local function extract_event_position(e)
+    if type(e) ~= 'table' then return nil end
+    local direct = read_pos_xyz(e.position)
+    if direct then return direct end
+    local ent = e.entity
+    if type(ent) == 'table' then
+        if type(ent.position) == 'function' then
+            local parsed = read_pos_xyz(ok_call(ent.position, ent))
+            if parsed then return parsed end
+        end
+        local cached = read_pos_xyz(ent.pos)
+        if cached then return cached end
+    end
+    return nil
+end
+
+local function pos_dist(a, b)
+    if not a or not b then return nil end
+    local dx = a.x - b.x
+    local dy = a.y - b.y
+    local dz = (a.z or 0) - (b.z or 0)
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
+local function read_sr_vec3(v)
+    local tv = type(v)
+    if tv == 'table' then
+        return read_pos_xyz(v)
+    end
+    if tv ~= 'userdata' then return nil end
+    local ok_s, ts = pcall(tostring, v)
+    if not ok_s or type(ts) ~= 'string' or not ts:find('^Vector3%(') then
+        return nil
+    end
+    local sr = _G.stingray
+    local V3 = sr and sr.Vector3
+    if (type(V3) == 'table' or type(V3) == 'userdata') and type(V3.x) == 'function'
+        and type(V3.y) == 'function' and type(V3.z) == 'function' then
+        local x = ok_call(V3.x, v)
+        local y = ok_call(V3.y, v)
+        local z = ok_call(V3.z, v)
+        if type(x) == 'number' and type(y) == 'number' and type(z) == 'number' then
+            return read_pos_xyz({ x = x, y = y, z = z })
+        end
+    end
+    local sx, sy, sz = ts:match('^Vector3%(([^,]+),%s*([^,]+),%s*([^%)]+)%)')
+    if sx and sy and sz then
+        return read_pos_xyz({ x = tonumber(sx), y = tonumber(sy), z = tonumber(sz) })
+    end
+    return nil
+end
+
+local function is_world_pos_vec(v, ref_pos)
+    if not v then return false end
+    if math.abs(v.x) > 5000 or math.abs(v.y) > 5000 or math.abs(v.z) > 2000 then return false end
+    local n2 = v.x * v.x + v.y * v.y + v.z * v.z
+    if n2 < 4.0 then
+        if not ref_pos or (ref_pos.x * ref_pos.x + ref_pos.y * ref_pos.y) > 100.0 then
+            return false
+        end
+    end
+    return true
+end
+
+local function get_game_session()
+    local sr = _G.stingray
+    if not sr then return nil, nil end
+    local Net, GS = sr.Network, sr.GameSession
+    if type(Net) ~= 'table' and type(Net) ~= 'userdata' then return nil, nil end
+    if type(GS) ~= 'table' and type(GS) ~= 'userdata' then return nil, nil end
+    if type(Net.game_session) ~= 'function'
+        or type(GS.game_object_exists) ~= 'function'
+        or type(GS.game_object_field_batched) ~= 'function' then
+        return nil, nil
+    end
+    local session = ok_call(Net.game_session)
+    if not session then return nil, nil end
+    if type(GS.in_session) == 'function' and ok_call(GS.in_session, session) == false then
+        return nil, nil
+    end
+    return session, GS
+end
+
+local function update_record_pos(rec, pos, source)
+    if not rec or not pos then return end
+    rec.pos = pos
+    rec.pos_at = M.clock
+    rec.pos_source = source
+end
+
+local function reset_goid_tracking(rec)
+    if not rec then return end
+    rec.goid_cands = nil
+    rec.goid_locked = nil
+    rec.goid_cluster_built = nil
+    rec.goid_live_moved = false
+    rec.goid_last_at = nil
+    rec.goid_retry_at = nil
+    rec.goid_retries = nil
+    rec.goid_diag_logged = nil
+    rec.goid_scan_cursor = nil
+    rec.goid_scan_done = nil
+end
+
+local function max_field_index(fields)
+    local n = 0
+    for k in pairs(fields) do
+        if type(k) == 'number' and k >= 1 and k <= 256 and k == math.floor(k) and k > n then
+            n = k
+        end
+    end
+    return n
+end
+
+local function discover_goid_cands(session, GS, rec)
+    local base = tonumber(rec.network_id)
+    if not base then return end
+    local ref = rec.spawn_pos or rec.event_pos or M.last_player_pos
+
+    local targets = {}
+    local seen_g = {}
+    local function push_g(g, prio)
+        if type(g) == 'number' and g >= 0 and g < 65536 and g == math.floor(g) and not seen_g[g] then
+            seen_g[g] = true
+            targets[#targets + 1] = { goid = g, prio = prio }
+        end
+    end
+
+    push_g(base, 3)
+    local base_fields = nil
+    if ok_call(GS.game_object_exists, session, base) == true then
+        base_fields = ok_call(GS.game_object_field_batched, session, base, {})
+        if type(base_fields) == 'table' then
+            local n_bf = max_field_index(base_fields)
+            for i = 1, n_bf do
+                local v = base_fields[i]
+                if type(v) == 'table' and not read_sr_vec3(v) then
+                    local count = 0
+                    for _, raw_lid in pairs(v) do
+                        local lid = tonumber(raw_lid)
+                        if lid then
+                            push_g(lid, 2)
+                            count = count + 1
+                            if count >= 16 then break end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    for delta = -6, 6 do
+        if delta ~= 0 then push_g(base + delta, 1) end
+    end
+
+    local cands = {}
+    local n_cands = 0
+    local diag_parts = {}
+    for _, entry in ipairs(targets) do
+        local g, prio = entry.goid, entry.prio
+        local fields = (g == base) and base_fields or nil
+        if fields == nil and ok_call(GS.game_object_exists, session, g) == true then
+            fields = ok_call(GS.game_object_field_batched, session, g, {})
+        end
+        if type(fields) == 'table' then
+            local n_f = max_field_index(fields)
+            for i = 1, n_f do
+                local vec = read_sr_vec3(fields[i])
+                if vec and is_world_pos_vec(vec, ref) then
+                    local d = ref and pos_dist(vec, ref) or nil
+                    local max_d = (prio >= 2 and 1500.0) or ((rec.spawn_pos and 35.0) or 1500.0)
+                    if (not d or d <= max_d) then
+                        local key = tostring(g) .. ':' .. tostring(i)
+                        cands[key] = {
+                            goid = g,
+                            idx = i,
+                            prio = prio,
+                            init = vec,
+                            cur = vec,
+                            moved = 0,
+                            init_dist = d or 0,
+                        }
+                        n_cands = n_cands + 1
+                        if #diag_parts < 8 then
+                            diag_parts[#diag_parts + 1] = string.format('%d[%d]:(%.1f,%.1f,%.1f)',
+                                g, i, vec.x, vec.y, vec.z)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    rec.goid_cands = cands
+    rec.goid_cluster_built = true
+    if not rec.goid_diag_logged then
+        rec.goid_diag_logged = true
+        wf('GOID_VECS id=%s base=%d spawn=%s cands=%d [%s]',
+            tostring(rec.id), base,
+            rec.spawn_pos and string.format('(%.1f,%.1f,%.1f)', rec.spawn_pos.x, rec.spawn_pos.y, rec.spawn_pos.z) or 'nil',
+            n_cands, table.concat(diag_parts, ' '))
+    end
+    if n_cands == 0 then
+        rec.goid_retries = (rec.goid_retries or 0) + 1
+        if rec.goid_retries < 4 then
+            rec.goid_cluster_built = false
+            rec.goid_retry_at = M.clock + 0.5
+        end
+    end
+end
+
+local function scan_goid_for_record(session, GS, rec)
+    if rec.goid_scan_done or rec.network_id ~= nil then return end
+    local want_max = rec.max or DEFAULT_MAX_HP
+    local ref = rec.spawn_pos or rec.event_pos
+    local cur = rec.goid_scan_cursor or 1
+    local stop = math.min(16384, cur + 255)
+    for g = cur, stop do
+        if ok_call(GS.game_object_exists, session, g) == true then
+            local fields = ok_call(GS.game_object_field_batched, session, g, {})
+            if type(fields) == 'table' then
+                local has_max, has_vec = false, false
+                local n_f = max_field_index(fields)
+                for i = 1, n_f do
+                    local v = fields[i]
+                    if v == want_max then has_max = true end
+                    if not has_vec and ref then
+                        local vec = read_sr_vec3(v)
+                        if vec and is_world_pos_vec(vec, ref) and (pos_dist(vec, ref) or 9999) <= 80.0 then
+                            has_vec = true
+                        end
+                    end
+                    if has_max and (has_vec or not ref) then break end
+                end
+                if has_max and (has_vec or not ref) then
+                    rec.network_id = g
+                    rec.goid_scan_done = true
+                    wf('GOID_SCAN_MATCH id=%s goid=%d max=%d', tostring(rec.id), g, want_max)
+                    return
+                end
+            end
+        end
+    end
+    if stop >= 16384 then
+        rec.goid_scan_done = true
+    else
+        rec.goid_scan_cursor = stop + 1
+    end
+end
+
+local function candidate_better(a, b)
+    local ma = (a.moved or 0) >= 0.5
+    local mb = (b.moved or 0) >= 0.5
+    if ma ~= mb then return ma end
+    if a.prio ~= b.prio then return a.prio > b.prio end
+    return (a.init_dist or 0) < (b.init_dist or 0)
+end
+
+local function poll_record_live_pos(session, GS, rec)
+    if rec.dead then return end
+    if rec.network_id == nil then
+        scan_goid_for_record(session, GS, rec)
+        if rec.network_id == nil then return end
+    end
+
+    if rec.goid_locked then
+        local c = rec.goid_locked
+        if ok_call(GS.game_object_exists, session, c.goid) == true then
+            local fields = ok_call(GS.game_object_field_batched, session, c.goid, {})
+            local v = type(fields) == 'table' and read_sr_vec3(fields[c.idx]) or nil
+            if v and is_world_pos_vec(v, rec.spawn_pos or c.init) then
+                local step_d = pos_dist(v, c.cur) or 0
+                if step_d <= 350.0 then
+                    c.cur = v
+                    c.moved = math.max(c.moved or 0, pos_dist(v, c.init) or 0)
+                    rec.goid_last_at = M.clock
+                    rec.goid_live_moved = (c.moved >= 0.5)
+                    update_record_pos(rec, v, 'goid_live')
+                    return
+                end
+            end
+        end
+        rec.goid_locked = nil
+        rec.goid_live_moved = false
+        return
+    end
+
+    if not rec.goid_cluster_built and M.clock >= (rec.goid_retry_at or 0) then
+        discover_goid_cands(session, GS, rec)
+    end
+    if not rec.goid_cands or next(rec.goid_cands) == nil then return end
+
+    local by_goid = {}
+    for _, c in pairs(rec.goid_cands) do
+        local list = by_goid[c.goid]
+        if not list then
+            list = {}
+            by_goid[c.goid] = list
+        end
+        list[#list + 1] = c
+    end
+
+    local best_c = nil
+    for g, list in pairs(by_goid) do
+        if ok_call(GS.game_object_exists, session, g) == true then
+            local fields = ok_call(GS.game_object_field_batched, session, g, {})
+            if type(fields) == 'table' then
+                for _, c in ipairs(list) do
+                    local v = read_sr_vec3(fields[c.idx])
+                    if v and is_world_pos_vec(v, rec.spawn_pos or c.init) then
+                        local step_d = pos_dist(v, c.cur) or 0
+                        if step_d <= 350.0 then
+                            c.cur = v
+                            c.moved = math.max(c.moved or 0, pos_dist(v, c.init) or 0)
+                            if not best_c or candidate_better(c, best_c) then
+                                best_c = c
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if best_c then
+        rec.goid_last_at = M.clock
+        update_record_pos(rec, best_c.cur, 'goid_live')
+        if (best_c.moved or 0) >= 0.5 then
+            rec.goid_locked = best_c
+            rec.goid_live_moved = true
+            wf('GOID_LIVE_LOCK id=%s goid=%d idx=%d prio=%d moved=%.1fm pos=(%.1f,%.1f,%.1f)',
+                tostring(rec.id), best_c.goid, best_c.idx, best_c.prio, best_c.moved,
+                best_c.cur.x, best_c.cur.y, best_c.cur.z)
+        end
+    end
+end
+
+local function poll_live_positions()
+    if not M.in_mission or next(M.records) == nil then return end
+    local want_any = C.locator_radar or C.locator_pointer or C.locator_bar_distance
+    if not want_any then return end
+    if M.clock < (M.next_goid_poll or 0) then return end
+    M.next_goid_poll = M.clock + 0.033
+
+    local session, GS = get_game_session()
+    if not session or not GS then return end
+    for _, rec in pairs(M.records) do
+        if not rec.dead then
+            poll_record_live_pos(session, GS, rec)
+        end
+    end
 end
 
 local function entity_max_hp(e, fallback)
@@ -799,6 +1431,11 @@ local function reset_records(reason, new_epoch)
     M.records = {}
     M.best = nil
     M.live_count = 0
+    M.spatial = nil
+    M.last_fx = nil
+    M.last_fy = nil
+    M.last_player_pos = nil
+    M.next_goid_poll = 0
     if new_epoch ~= nil then M.epoch = new_epoch end
     if had then
         wf('MISSION_RESET reason=%s epoch=%s', tostring(reason), tostring(M.epoch))
@@ -849,9 +1486,12 @@ local function on_entity_spawned(e)
     sync_event_epoch(e)
     local id = tonumber(e.entity_id) or tostring(e.entity_id or '0')
     local max_hp = entity_max_hp(e, DEFAULT_MAX_HP)
+    local pos = extract_event_position(e)
     local old_k, carry = find_carry_record(id, e.network_id)
     if carry then
         if old_k ~= id then M.records[old_k] = nil end
+        local net_changed = e.network_id ~= nil and carry.network_id ~= nil
+            and tostring(e.network_id) ~= tostring(carry.network_id)
         carry.id = id
         carry.max = max_hp > 0 and max_hp or carry.max
         if carry.hp > carry.max then carry.hp = carry.max end
@@ -861,6 +1501,14 @@ local function on_entity_spawned(e)
         carry.burrowed = false
         carry.invalid_since = nil
         carry.updated_at = M.clock
+        if pos then
+            carry.spawn_pos = pos
+            carry.event_pos = pos
+        end
+        if pos or net_changed then
+            reset_goid_tracking(carry)
+        end
+        update_record_pos(carry, pos, 'resurface')
         M.records[id] = carry
         wf('HIVE_LORD_RESURFACE id=%s hp=%d/%d net=%s',
             tostring(id), carry.hp, carry.max, tostring(carry.network_id))
@@ -884,7 +1532,13 @@ local function on_entity_spawned(e)
             died_at = nil,
             burrowed = false,
             invalid_since = nil,
+            pos = nil,
+            pos_at = nil,
+            pos_source = nil,
+            spawn_pos = pos,
+            event_pos = pos,
         }
+        update_record_pos(rec, pos, 'spawn')
         M.records[id] = rec
         wf('HIVE_LORD_SPAWN id=%s hp=%d/%d net=%s unit=%s',
             tostring(id), max_hp, max_hp, tostring(e.network_id), tostring(e.unit_id))
@@ -931,12 +1585,16 @@ local function on_entity_damaged(e)
         M.records[id] = rec
     end
 
+    local prev_net = rec.network_id
     rec.hp = hp
     rec.max = max_hp
     if not rec.trail_hp or rec.trail_hp < hp then rec.trail_hp = hp end
     rec.entity = e.entity or rec.entity
     rec.unit_id = e.unit_id or rec.unit_id
     rec.network_id = e.network_id or rec.network_id
+    if e.network_id ~= nil and prev_net ~= nil and tostring(e.network_id) ~= tostring(prev_net) then
+        reset_goid_tracking(rec)
+    end
     rec.last_damage = dmg
     rec.last_hit_at = M.clock
     rec.updated_at = M.clock
@@ -946,6 +1604,19 @@ local function on_entity_damaged(e)
     rec.invalid_since = nil
     rec.downed = e.downed == true
     rec.local_attacker = e.local_attacker == true
+    local epos = extract_event_position(e)
+    if epos then
+        rec.event_pos = epos
+        if not rec.spawn_pos then rec.spawn_pos = epos end
+        local freeze_at_emerge = rec.goid_live_moved
+            and rec.goid_last_at
+            and (M.clock - rec.goid_last_at) <= 0.25
+            and rec.spawn_pos
+            and (pos_dist(epos, rec.spawn_pos) or 0) <= 1.0
+        if not freeze_at_emerge then
+            update_record_pos(rec, epos, 'hit')
+        end
+    end
 
     local step = math.max(1, math.floor(max_hp * 0.05))
     local should_log = C.debug or is_new or hp == 0
@@ -984,6 +1655,7 @@ local function on_entity_died(e)
     rec.invalid_since = nil
     rec.local_killer = e.local_killer == true
     rec.observed = e.observed
+    update_record_pos(rec, extract_event_position(e), 'died')
     wf('HIVE_LORD_DIED id=%s max=%d observed=%s local_killer=%s',
         tostring(id), max_hp, tostring(e.observed), tostring(rec.local_killer))
     if not M.best or M.best.id == id or M.best.dead then
@@ -1551,25 +2223,233 @@ local function paint_bar(bx, by, bw, bh, ratio, trail_ratio, dead, a)
     M.bar_key = bkey
 end
 
+local function dir_label(deg, horiz_dist, use_zh, short_form)
+    if horiz_dist and horiz_dist < 3.0 then
+        return use_zh and ZH.dir_near or EN.dir_near
+    end
+    local a = math.abs(deg or 0)
+    local key
+    if a <= 22 then key = 'dir_f'
+    elseif a > 157 then key = 'dir_b'
+    elseif deg > 0 then
+        if deg <= 67 then key = 'dir_fr'
+        elseif deg <= 112 then key = 'dir_r'
+        else key = 'dir_br' end
+    else
+        if deg >= -67 then key = 'dir_fl'
+        elseif deg >= -112 then key = 'dir_l'
+        else key = 'dir_bl' end
+    end
+    if use_zh then return ZH[key] end
+    if short_form and key == 'dir_f' then return 'FWD' end
+    if short_form and key == 'dir_b' then return 'BACK' end
+    return EN[key]
+end
+
+local function make_preview_record()
+    return {
+        hp = 112500,
+        max = DEFAULT_MAX_HP,
+        trail_hp = 127500,
+        last_damage = 15000,
+        last_hit_at = M.clock,
+        preview = true,
+        dead = false,
+        burrowed = false,
+        pos = { x = 71.5, y = 114.5, z = 0 },
+        pos_at = M.clock,
+        pos_source = 'preview',
+    }
+end
+
+local function target_for_record(r)
+    if not r or not M.spatial then return nil end
+    if M.spatial.primary and (M.spatial.primary.rec == r or (r.preview and M.spatial.preview)) then
+        return M.spatial.primary
+    end
+    for _, t in ipairs(M.spatial.targets or {}) do
+        if t.rec == r then return t end
+    end
+    return nil
+end
+
+local function compute_target_metrics(rec, ref_pos, fx, fy, is_primary)
+    if not rec or not rec.pos or not ref_pos then return nil end
+    local dx = rec.pos.x - ref_pos.x
+    local dy = rec.pos.y - ref_pos.y
+    local dz = (rec.pos.z or 0) - (ref_pos.z or 0)
+    local horiz = math.sqrt(dx * dx + dy * dy)
+    local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+    local fwd_m = dx * fx + dy * fy
+    local right_m = dx * fy - dy * fx
+    local angle = (horiz >= 0.1) and atan2(right_m, fwd_m) or 0
+    local deg = math.floor(angle * (180.0 / math.pi) + 0.5)
+    if deg > 180 then deg = deg - 360 elseif deg < -180 then deg = deg + 360 end
+    local age = math.max(0, M.clock - (rec.pos_at or M.clock))
+    return {
+        rec = rec,
+        primary = is_primary == true,
+        dist = dist,
+        horiz = horiz,
+        dz = dz,
+        fwd = fwd_m,
+        right = right_m,
+        angle = angle,
+        deg = deg,
+        age = age,
+    }
+end
+
+local function sample_spatial_state(preview_rec)
+    local want_any = C.locator_radar or C.locator_pointer or C.locator_bar_distance
+    if not want_any then
+        M.spatial = nil
+        return
+    end
+
+    if preview_rec and not M.best then
+        local fx, fy = 0, 1
+        local me_pos = { x = 0, y = 0, z = 0 }
+        local prim = compute_target_metrics(preview_rec, me_pos, fx, fy, true)
+        M.spatial = {
+            preview = true,
+            me_pos = me_pos,
+            fx = fx,
+            fy = fy,
+            has_heading = true,
+            squad = {
+                { right = -48, fwd = 62 },
+                { right = 92, fwd = -34 },
+            },
+            targets = prim and { prim } or {},
+            primary = prim,
+        }
+        return
+    end
+
+    if not M.best or not M.in_mission then
+        M.spatial = nil
+        return
+    end
+
+    local D = M.hub_ref
+    if not D then
+        M.spatial = nil
+        return
+    end
+
+    local me = (type(D.player) == 'function') and ok_call(D.player) or nil
+    local aim = (type(D.aim) == 'function') and ok_call(D.aim) or nil
+    local me_pos = read_pos_xyz(type(me) == 'table' and me.position or nil)
+    local aim_cam = read_pos_xyz(type(aim) == 'table' and aim.camera or nil)
+    local aim_pt = read_pos_xyz(type(aim) == 'table' and aim.camera_point or nil)
+    local ref_pos = me_pos or aim_cam
+    M.last_player_pos = ref_pos
+
+    local fx, fy, has_heading = nil, nil, false
+    local afwd = type(aim) == 'table' and aim.forward or nil
+    if type(afwd) == 'table' then
+        local ax, ay = tonumber(afwd.x), tonumber(afwd.y)
+        if ax and ay and ax == ax and ay == ay then
+            local len2 = ax * ax + ay * ay
+            if len2 > 1e-6 then
+                local inv = 1.0 / math.sqrt(len2)
+                fx, fy, has_heading = ax * inv, ay * inv, true
+            end
+        end
+    end
+    if not has_heading and aim_cam and aim_pt then
+        local ax, ay = aim_pt.x - aim_cam.x, aim_pt.y - aim_cam.y
+        local len2 = ax * ax + ay * ay
+        if len2 > 1e-6 then
+            local inv = 1.0 / math.sqrt(len2)
+            fx, fy, has_heading = ax * inv, ay * inv, true
+        end
+    end
+    if has_heading then
+        M.last_fx, M.last_fy = fx, fy
+    elseif M.last_fx and M.last_fy then
+        fx, fy, has_heading = M.last_fx, M.last_fy, true
+    else
+        fx, fy, has_heading = 0, 1, false
+    end
+
+    local squad = {}
+    if C.locator_radar and C.locator_squad and ref_pos and type(D.players) == 'function' then
+        local plist = ok_call(D.players, false)
+        if type(plist) == 'table' then
+            for _, p in ipairs(plist) do
+                if type(p) == 'table' and p.is_local ~= true and p.alive ~= false then
+                    local sp = read_pos_xyz(p.position)
+                    if sp then
+                        local sdx, sdy = sp.x - ref_pos.x, sp.y - ref_pos.y
+                        squad[#squad + 1] = {
+                            fwd = sdx * fx + sdy * fy,
+                            right = sdx * fy - sdy * fx,
+                        }
+                        if #squad >= 3 then break end
+                    end
+                end
+            end
+        end
+    end
+
+    local targets = {}
+    if ref_pos then
+        local pt = compute_target_metrics(M.best, ref_pos, fx, fy, true)
+        if pt then targets[#targets + 1] = pt end
+        for _, r in pairs(M.records) do
+            if r ~= M.best and not r.dead and r.pos then
+                local st = compute_target_metrics(r, ref_pos, fx, fy, false)
+                if st then targets[#targets + 1] = st end
+                if #targets >= 3 then break end
+            end
+        end
+    end
+
+    M.spatial = {
+        preview = false,
+        me_pos = ref_pos,
+        fx = fx,
+        fy = fy,
+        has_heading = has_heading,
+        squad = squad,
+        targets = targets,
+        primary = (targets[1] and targets[1].primary) and targets[1] or nil,
+    }
+end
+
 local function format_hud_lines(r, use_zh)
     local hp = math.max(0, r.hp or 0)
     local max_hp = math.max(1, r.max or DEFAULT_MAX_HP)
     local pct = math.max(0, math.min(100, (hp / max_hp) * 100.0))
-    local name = use_zh and ZH.boss_name or 'HIVE LORD'
+    local name = use_zh and ZH.boss_name or EN.boss_name
     local txt = string.format('%s   %s / %s  (%.1f%%)', name, format_int(hp), format_int(max_hp), pct)
 
     local parts = {}
     if r.preview then
-        parts[#parts + 1] = use_zh and ZH.preview_tag or 'PREVIEW'
+        parts[#parts + 1] = use_zh and ZH.preview_tag or EN.preview_tag
     elseif r.dead then
-        parts[#parts + 1] = use_zh and ZH.slain or 'SLAIN'
+        parts[#parts + 1] = use_zh and ZH.slain or EN.slain
     elseif r.burrowed then
-        parts[#parts + 1] = use_zh and ZH.submerged or 'SUBMERGED'
+        parts[#parts + 1] = use_zh and ZH.submerged or EN.submerged
     else
-        parts[#parts + 1] = use_zh and ZH.active_tag or 'LIVE'
+        parts[#parts + 1] = use_zh and ZH.active_tag or EN.active_tag
     end
     if M.live_count > 1 and not r.preview then
         parts[#parts + 1] = string.format('[%d ACTIVE]', M.live_count)
+    end
+    if C.locator_bar_distance then
+        local tm = target_for_record(r)
+        if tm and tm.dist then
+            local d_int = math.floor(tm.dist + 0.5)
+            local dir_s = dir_label(tm.deg, tm.horiz, use_zh, true)
+            if use_zh then
+                parts[#parts + 1] = string.format('%d m (%s)', d_int, dir_s)
+            else
+                parts[#parts + 1] = string.format('%dm %s', d_int, dir_s)
+            end
+        end
     end
     if (r.last_damage or 0) > 0 and r.last_hit_at and (M.clock - r.last_hit_at) <= 3.5 then
         parts[#parts + 1] = string.format('-%s DMG', format_int(r.last_damage))
@@ -1668,7 +2548,473 @@ local function paint_debug_texts(center_x, bx, title_y, sub_y, sc, r, a)
     return (ok1 and ok2) and true or false, txt
 end
 
-local function hud_tick()
+local function locator_gui_api()
+    local m = rawget(_G, 'MDL3')
+    if type(m) == 'table' and type(m.gui) == 'table' then return m.gui end
+    local mdl = rawget(_G, 'MDL')
+    if type(mdl) == 'table' and type(mdl.gui) == 'table' then return mdl.gui end
+    return nil
+end
+
+local function loc_state(text)
+    if text ~= M.last_loc_state then
+        M.last_loc_state = text
+        wf('LOCATOR_STATE %s', text)
+    end
+end
+
+local function hide_locator_guis()
+    if M.loc_visible then
+        if M.loc_shape_canvas and type(M.loc_shape_canvas.show) == 'function' then
+            pcall(M.loc_shape_canvas.show, M.loc_shape_canvas, false)
+        end
+        if M.loc_text_canvas and type(M.loc_text_canvas.show) == 'function' then
+            pcall(M.loc_text_canvas.show, M.loc_text_canvas, false)
+        end
+        M.loc_visible = false
+        M.loc_text_key = nil
+    end
+end
+
+local function dispose_locator_guis()
+    if M.loc_shape_canvas and type(M.loc_shape_canvas.destroy) == 'function' then
+        pcall(M.loc_shape_canvas.destroy, M.loc_shape_canvas)
+    end
+    if M.loc_text_canvas and type(M.loc_text_canvas.destroy) == 'function' then
+        pcall(M.loc_text_canvas.destroy, M.loc_text_canvas)
+    end
+    M.loc_shape_canvas = nil
+    M.loc_text_canvas = nil
+    M.loc_gui_ref = nil
+    M.loc_visible = false
+    M.loc_text_key = nil
+end
+
+local function target_urgency_color(r, tm)
+    if not r then return 255, 213, 44 end
+    if r.preview then return 255, 213, 44 end
+    if r.dead then return 215, 85, 80 end
+    if r.burrowed then return 240, 165, 55 end
+    if tm and tm.dist then
+        if tm.dist < 60 or (math.abs(tm.deg or 0) >= 115 and tm.dist < 150) then
+            return 255, 76, 56
+        elseif tm.dist < 130 then
+            return 255, 168, 42
+        end
+    end
+    return 255, 213, 44
+end
+
+local function radar_geometry(sw, sh)
+    local rsc = clamp(tonumber(C.locator_radar_scale) or DEFAULTS.locator_radar_scale, 0.40, 3.00)
+    local R = 68 * rsc
+    local off_x = tonumber(C.locator_radar_x) or DEFAULTS.locator_radar_x
+    local off_y = tonumber(C.locator_radar_y) or DEFAULTS.locator_radar_y
+    local cx = clamp(sw * 0.5 + off_x, R + 20 * rsc, math.max(R + 20 * rsc, sw - R - 20 * rsc))
+    local cy = clamp(sh * 0.5 + off_y, R + 28 * rsc, math.max(R + 28 * rsc, sh - R - 52 * rsc))
+    local range_m = clamp(tonumber(C.locator_range) or DEFAULTS.locator_range, 50, 1000)
+    return cx, cy, R, rsc, range_m
+end
+
+local function project_to_radar(right_m, fwd_m, cx, cy, R, rsc, range_m)
+    local max_r = math.max(8, R - 7 * rsc)
+    local m_to_px = max_r / range_m
+    local ox = right_m * m_to_px
+    local oy = -fwd_m * m_to_px
+    local d2 = ox * ox + oy * oy
+    local clamped = false
+    if d2 > max_r * max_r then
+        local inv = max_r / math.sqrt(d2)
+        ox, oy = ox * inv, oy * inv
+        clamped = true
+    end
+    return cx + ox, cy + oy, clamped
+end
+
+local function paint_locator_shapes(c, sw, sh, active_r, sp, a)
+    local OFF = -2000
+    local CLEAR = { 0, 0, 0, 0 }
+    local show_radar = C.locator_radar == true
+    local show_ptr = C.locator_pointer == true
+    local prim = sp and sp.primary or nil
+
+    local cx, cy, R, rsc, range_m = radar_geometry(sw, sh)
+    local rim_w = math.max(1, math.floor(2 * rsc + 0.5))
+    local ring_w = math.max(1, math.floor(1.8 * rsc + 0.5))
+    local tr, tg, tb = target_urgency_color(active_r, prim)
+
+    local function put_circle_disc(x, y, rad, col, segs)
+        c:circle(x, y, rad, col, { segments = segs })
+    end
+    local function put_circle_ring(x, y, rad, col, segs, rthick)
+        c:circle(x, y, rad, col, { segments = segs, ring = rthick })
+    end
+    local function put_line(x1, y1, x2, y2, wpx, col)
+        c:line(x1, y1, x2, y2, wpx, col)
+    end
+    local function put_tri(x1, y1, x2, y2, x3, y3, col)
+        c:triangle(x1, y1, x2, y2, x3, y3, col)
+    end
+
+    c:begin()
+
+    -- Slots 1-7: Radar backdrop, rings, crosshairs, player FOV cone
+    if show_radar then
+        put_circle_disc(cx, cy, R, { 10, 13, 18, math.floor(a * 0.72) }, 48)
+        put_circle_ring(cx, cy, R, { 220, 188, 92, math.floor(a * 0.86) }, 48, rim_w)
+        put_circle_ring(cx, cy, R * 0.5, { 130, 145, 165, math.floor(a * 0.36) }, 36, 1)
+        local pad = 4 * rsc
+        put_line(cx - R + pad, cy, cx + R - pad, cy, 1, { 120, 135, 155, math.floor(a * 0.28) })
+        put_line(cx, cy - R + pad, cx, cy + R - pad, 1, { 120, 135, 155, math.floor(a * 0.28) })
+        local fw = math.max(1, 1.2 * rsc)
+        put_line(cx, cy, cx - R * 0.46, cy - R * 0.58, fw, { 150, 205, 255, math.floor(a * 0.28) })
+        put_line(cx, cy, cx + R * 0.46, cy - R * 0.58, fw, { 150, 205, 255, math.floor(a * 0.28) })
+    else
+        put_circle_disc(OFF, OFF, 10, CLEAR, 48)
+        put_circle_ring(OFF, OFF, 10, CLEAR, 48, rim_w)
+        put_circle_ring(OFF, OFF, 10, CLEAR, 36, 1)
+        put_line(OFF, OFF, OFF + 10, OFF, 1, CLEAR)
+        put_line(OFF, OFF, OFF, OFF + 10, 1, CLEAR)
+        put_line(OFF, OFF, OFF + 10, OFF + 10, 1, CLEAR)
+        put_line(OFF, OFF, OFF - 10, OFF + 10, 1, CLEAR)
+    end
+
+    -- Slots 8-10: North 'N' glyph on radar rim
+    if show_radar then
+        local fx = (sp and sp.fx) or 0
+        local fy = (sp and sp.fy) or 1
+        local n_rad = R + 9 * rsc
+        local nx = cx - fx * n_rad
+        local ny = cy - fy * n_rad
+        local nw = 2.4 * rsc
+        local nh = 3.6 * rsc
+        local nl_w = math.max(1.2, 1.5 * rsc)
+        local ncol = { 225, 232, 240, math.floor(a * 0.90) }
+        put_line(nx - nw, ny + nh, nx - nw, ny - nh, nl_w, ncol)
+        put_line(nx - nw, ny - nh, nx + nw, ny + nh, nl_w, ncol)
+        put_line(nx + nw, ny + nh, nx + nw, ny - nh, nl_w, ncol)
+    else
+        put_line(OFF, OFF, OFF, OFF + 6, 1, CLEAR)
+        put_line(OFF, OFF, OFF + 4, OFF + 6, 1, CLEAR)
+        put_line(OFF + 4, OFF, OFF + 4, OFF + 6, 1, CLEAR)
+    end
+
+    -- Slots 11-13: Up to 3 squadmate dots
+    local squad = (show_radar and sp and sp.squad) or {}
+    local sq_r = math.max(2.5, 3.2 * rsc)
+    for i = 1, 3 do
+        local mate = squad[i]
+        if show_radar and mate then
+            local mx, my = project_to_radar(mate.right, mate.fwd, cx, cy, R, rsc, range_m)
+            put_circle_disc(mx, my, sq_r, { 110, 210, 255, math.floor(a * 0.85) }, 12)
+        else
+            put_circle_disc(OFF, OFF, 4, CLEAR, 12)
+        end
+    end
+
+    -- Primary target radar coordinates
+    local bx, by, clamped = nil, nil, false
+    if show_radar and prim then
+        bx, by, clamped = project_to_radar(prim.right, prim.fwd, cx, cy, R, rsc, range_m)
+    end
+
+    -- Slot 14: Bearing line from center to primary Hive Lord
+    if show_radar and bx and by and ((bx - cx) * (bx - cx) + (by - cy) * (by - cy)) > 9 then
+        put_line(cx, cy, bx, by, math.max(1, 1.4 * rsc), { tr, tg, tb, math.floor(a * 0.42) })
+    else
+        put_line(OFF, OFF, OFF + 8, OFF, 1, CLEAR)
+    end
+
+    -- Slots 15-16: Secondary Hive Lords (if > 1 live)
+    local sec_idx = 0
+    local targets = (show_radar and sp and sp.targets) or {}
+    for _, t in ipairs(targets) do
+        if not t.primary and sec_idx < 2 then
+            sec_idx = sec_idx + 1
+            local sx2, sy2 = project_to_radar(t.right, t.fwd, cx, cy, R, rsc, range_m)
+            put_circle_disc(sx2, sy2, math.max(3.5, 4.4 * rsc), { 235, 155, 55, math.floor(a * 0.85) }, 16)
+        end
+    end
+    while sec_idx < 2 do
+        sec_idx = sec_idx + 1
+        put_circle_disc(OFF, OFF, 4, CLEAR, 16)
+    end
+
+    -- Slots 17-18: Primary Hive Lord outer ring + core dot
+    if show_radar and bx and by and prim then
+        local fresh = not active_r.burrowed and not active_r.dead and (prim.age or 0) <= 2.5
+        local pr = 8.5 * rsc
+        local pa = math.floor(a * 0.72)
+        if fresh and not active_r.preview then
+            local pulse = 0.5 + 0.5 * math.sin(M.clock * 5.0)
+            pr = (8.0 + 3.5 * pulse) * rsc
+            pa = math.floor(a * (0.45 + 0.42 * (1.0 - pulse)))
+        end
+        local core_a = active_r.burrowed and math.floor(a * 0.65) or a
+        local core_r = math.max(4.0, (active_r.burrowed and 4.2 or 5.2) * rsc)
+        put_circle_ring(bx, by, math.max(ring_w + 2, pr), { tr, tg, tb, pa }, 24, ring_w)
+        put_circle_disc(bx, by, core_r, { tr, tg, tb, core_a }, 20)
+    else
+        put_circle_ring(OFF, OFF, math.max(ring_w + 2, 8), CLEAR, 24, ring_w)
+        put_circle_disc(OFF, OFF, 5, CLEAR, 20)
+    end
+
+    -- Slot 19: Rim overflow arrow when primary target is outside radar range
+    if show_radar and clamped and prim then
+        local ux = math.sin(prim.angle)
+        local uy = -math.cos(prim.angle)
+        local px = -uy
+        local py = ux
+        local tip_x = cx + ux * (R + 3.5 * rsc)
+        local tip_y = cy + uy * (R + 3.5 * rsc)
+        local base_x = cx + ux * (R - 5.0 * rsc)
+        local base_y = cy + uy * (R - 5.0 * rsc)
+        local w_wing = 4.5 * rsc
+        put_tri(tip_x, tip_y, base_x + px * w_wing, base_y + py * w_wing,
+            base_x - px * w_wing, base_y - py * w_wing, { tr, tg, tb, a })
+    else
+        put_tri(OFF, OFF, OFF + 8, OFF, OFF + 4, OFF + 6, CLEAR)
+    end
+
+    -- Slot 20: Local player center chevron pointing UP
+    if show_radar then
+        put_tri(cx, cy - 6.5 * rsc, cx - 4.5 * rsc, cy + 4.5 * rsc, cx + 4.5 * rsc, cy + 4.5 * rsc,
+            { 245, 250, 255, math.floor(a * 0.95) })
+    else
+        put_tri(OFF, OFF, OFF + 8, OFF, OFF + 4, OFF + 6, CLEAR)
+    end
+
+    -- Slots 21-22: Center-screen directional pointer (outline + fill)
+    if show_ptr and prim and not active_r.dead then
+        local scx, scy = sw * 0.5, sh * 0.5
+        local prad = clamp(tonumber(C.locator_pointer_radius) or DEFAULTS.locator_pointer_radius, 40, 500)
+        local ux = math.sin(prim.angle)
+        local uy = -math.cos(prim.angle)
+        local px = -uy
+        local py = ux
+        local ax = scx + ux * prad
+        local ay = scy + uy * prad
+        -- Outline backing triangle
+        put_tri(
+            ax + ux * 16, ay + uy * 16,
+            ax - ux * 10 + px * 12, ay - uy * 10 + py * 12,
+            ax - ux * 10 - px * 12, ay - uy * 10 - py * 12,
+            { 10, 12, 16, math.floor(a * 0.85) }
+        )
+        -- Bright directional arrow triangle
+        local ptr_a = active_r.burrowed and math.floor(a * 0.78) or math.floor(a * 0.96)
+        put_tri(
+            ax + ux * 13, ay + uy * 13,
+            ax - ux * 7 + px * 9.5, ay - uy * 7 + py * 9.5,
+            ax - ux * 7 - px * 9.5, ay - uy * 7 - py * 9.5,
+            { tr, tg, tb, ptr_a }
+        )
+    else
+        put_tri(OFF, OFF, OFF + 8, OFF, OFF + 4, OFF + 6, CLEAR)
+        put_tri(OFF, OFF, OFF + 8, OFF, OFF + 4, OFF + 6, CLEAR)
+    end
+
+    c:finish()
+end
+
+local function paint_locator_texts(c, sw, sh, active_r, sp, a)
+    local show_radar = C.locator_radar == true
+    local show_ptr = C.locator_pointer == true
+    local prim = sp and sp.primary or nil
+    local use_zh = is_chinese_ui()
+
+    local st = (type(c.status) == 'function') and ok_call(c.status, c) or nil
+    local font_ok = (type(st) ~= 'table') or (st.font ~= false)
+
+    local cx, cy, R, rsc, range_m = radar_geometry(sw, sh)
+    local title_s = use_zh and ZH.loc_radar_title or EN.loc_radar_title
+    local line1_s, line2_s = '', ''
+    if show_radar then
+        if prim and prim.dist then
+            local d_int = math.floor(prim.dist + 0.5)
+            local dir_s = dir_label(prim.deg, prim.horiz, use_zh, false)
+            if prim.horiz and prim.horiz < 3.0 then
+                line1_s = string.format(use_zh and '%d m  %s' or '%dm  %s', d_int, dir_s)
+            else
+                line1_s = string.format(use_zh and '%d m  %s %d\194\176' or '%dm  %s %d\194\176',
+                    d_int, dir_s, math.abs(prim.deg or 0))
+            end
+
+            local range_part = string.format('%s %dm',
+                use_zh and ZH.loc_range_tag or EN.loc_range_tag, math.floor(range_m + 0.5))
+            if active_r.preview then
+                line2_s = string.format('%s | %s', use_zh and ZH.preview_tag or EN.preview_tag, range_part)
+            elseif active_r.dead then
+                line2_s = use_zh and ZH.slain or EN.slain
+            elseif active_r.burrowed then
+                local age_s = math.floor((prim.age or 0) + 0.5)
+                line2_s = use_zh
+                    and string.format('%s %d%s | %s', ZH.loc_burrow_short, age_s, ZH.loc_sec_ago, range_part)
+                    or string.format('SUB %ds ago | %s', age_s, range_part)
+            elseif (prim.age or 0) >= 2.5 then
+                local age_s = math.floor((prim.age or 0) + 0.5)
+                line2_s = use_zh
+                    and string.format('%s %d%s | %s', ZH.loc_last_seen, age_s, ZH.loc_sec_ago, range_part)
+                    or string.format('%s %ds ago | %s', EN.loc_last_seen, age_s, range_part)
+            else
+                line2_s = string.format('%s | %s', use_zh and ZH.loc_live or EN.loc_live, range_part)
+            end
+        else
+            line1_s = use_zh and ZH.loc_waiting or EN.loc_waiting
+            line2_s = string.format('%s %dm',
+                use_zh and ZH.loc_range_tag or EN.loc_range_tag, math.floor(range_m + 0.5))
+        end
+    end
+
+    local ptr_label, tx, ty = nil, 0, 0
+    if show_ptr and prim and not active_r.dead and prim.dist then
+        local prad = clamp(tonumber(C.locator_pointer_radius) or DEFAULTS.locator_pointer_radius, 40, 500)
+        local ux = math.sin(prim.angle)
+        local uy = -math.cos(prim.angle)
+        tx = clamp(sw * 0.5 + ux * (prad + 28), 44, math.max(44, sw - 44))
+        ty = clamp(sh * 0.5 + uy * (prad + 28), 20, math.max(20, sh - 20))
+        local d_int = math.floor(prim.dist + 0.5)
+        if active_r.burrowed then
+            ptr_label = string.format('%dm %s', d_int, use_zh and ZH.loc_burrow_short or EN.loc_burrow_short)
+        elseif (prim.age or 0) >= 3.0 then
+            ptr_label = string.format('%dm %ds', d_int, math.floor(prim.age + 0.5))
+        else
+            ptr_label = string.format('%dm', d_int)
+        end
+    end
+
+    local qtx = math.floor(tx / 4 + 0.5)
+    local qty = math.floor(ty / 4 + 0.5)
+    local tkey = string.format('%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%s',
+        title_s, line1_s, line2_s, tostring(ptr_label or ''),
+        math.floor(cx), math.floor(cy), math.floor(R), qtx, qty, a,
+        tostring(font_ok), tostring(show_radar))
+
+    if M.loc_text_key == nil then M.loc_text_has_pos = false end
+    local force = (M.loc_text_key == nil) or (prim ~= nil and not M.loc_text_has_pos)
+    if tkey == M.loc_text_key then return end
+    if not force and (M.clock - (M.loc_text_last_at or -100)) < 0.10 then return end
+
+    c:begin()
+    if font_ok then
+        local tr, tg, tb = target_urgency_color(active_r, prim)
+        if show_radar then
+            local sz_title = math.max(10, math.floor(14 * rsc + 0.5))
+            local sz_l1 = math.max(12, math.floor(17 * rsc + 0.5))
+            local sz_l2 = math.max(10, math.floor(12 * rsc + 0.5))
+            c:text(title_s, cx, cy - R - 13 * rsc, {
+                size = sz_title,
+                color = { 255, 224, 130, a },
+                align = 'center',
+                valign = 'middle',
+            })
+            c:text(line1_s, cx, cy + R + 16 * rsc, {
+                size = sz_l1,
+                color = { tr, tg, tb, a },
+                align = 'center',
+                valign = 'middle',
+            })
+            c:text(line2_s, cx, cy + R + 35 * rsc, {
+                size = sz_l2,
+                color = { 200, 210, 222, math.floor(a * 0.88) },
+                align = 'center',
+                valign = 'middle',
+            })
+        end
+        if ptr_label then
+            local mw = (type(c.measure) == 'function') and ok_call(c.measure, c, ptr_label, 14) or nil
+            local pw = math.max(44, (type(mw) == 'number' and mw > 0 and mw or (#ptr_label * 8)) + 14)
+            local ph = 20
+            c:rect(tx - pw * 0.5, ty - ph * 0.5, pw, ph, { 10, 12, 16, math.floor(a * 0.78) })
+            c:text(ptr_label, tx, ty, {
+                size = 14,
+                color = { tr, tg, tb, a },
+                align = 'center',
+                valign = 'middle',
+            })
+        end
+    end
+    c:finish()
+
+    M.loc_text_key = tkey
+    M.loc_text_last_at = M.clock
+    M.loc_text_has_pos = (prim ~= nil)
+end
+
+local function locator_tick(active_r)
+    if not (C.locator_radar or C.locator_pointer) then
+        hide_locator_guis()
+        return loc_state('off (disabled in settings)')
+    end
+    if not active_r then
+        hide_locator_guis()
+        return loc_state('idle')
+    end
+
+    local gui = locator_gui_api()
+    if not gui or (tonumber(gui.api) or 0) < 1 or type(gui.canvas) ~= 'function' then
+        if M.loc_shape_canvas or M.loc_text_canvas then dispose_locator_guis() end
+        return loc_state('unavailable (requires MDL3.gui api>=1)')
+    end
+
+    if gui ~= M.loc_gui_ref then
+        dispose_locator_guis()
+        M.loc_gui_ref = gui
+    end
+
+    if not M.loc_shape_canvas then
+        local ok_s, cs = pcall(gui.canvas, { layer = 62, units = 'reference' })
+        local ok_t, ct = pcall(gui.canvas, { layer = 64, units = 'reference' })
+        if not (ok_s and cs and ok_t and ct) then
+            if cs and type(cs.destroy) == 'function' then pcall(cs.destroy, cs) end
+            if ct and type(ct.destroy) == 'function' then pcall(ct.destroy, ct) end
+            if not M.loc_warned_err then
+                M.loc_warned_err = true
+                wf('LOCATOR_CANVAS_ERR shape=%s text=%s', tostring(cs), tostring(ct))
+            end
+            return loc_state('canvas create failed')
+        end
+        M.loc_shape_canvas = cs
+        M.loc_text_canvas = ct
+        M.loc_visible = true
+        M.loc_text_key = nil
+    elseif not M.loc_visible then
+        if type(M.loc_shape_canvas.show) == 'function' then
+            pcall(M.loc_shape_canvas.show, M.loc_shape_canvas, true)
+        end
+        if type(M.loc_text_canvas.show) == 'function' then
+            pcall(M.loc_text_canvas.show, M.loc_text_canvas, true)
+        end
+        M.loc_visible = true
+        M.loc_text_key = nil
+    end
+
+    local s = ok_call(M.loc_shape_canvas.screen, M.loc_shape_canvas)
+    local sw = type(s) == 'table' and tonumber(s.w) or nil
+    local sh = type(s) == 'table' and tonumber(s.h) or nil
+    if not (sw and sh and sw > 0 and sh > 0) then
+        return loc_state('no screen dims')
+    end
+
+    local a = clamp(math.floor(C.hud_alpha * 255 + 0.5), 0, 255)
+    local ok1, err1 = pcall(paint_locator_shapes, M.loc_shape_canvas, sw, sh, active_r, M.spatial, a)
+    local ok2, err2 = pcall(paint_locator_texts, M.loc_text_canvas, sw, sh, active_r, M.spatial, a)
+    if not (ok1 and ok2) then
+        if not M.loc_warned_err then
+            M.loc_warned_err = true
+            wf('LOCATOR_DRAW_ERR shape=%s text=%s', tostring(err1), tostring(err2))
+        end
+        return loc_state('draw error')
+    end
+
+    local prim = M.spatial and M.spatial.primary
+    if prim and prim.dist then
+        return loc_state(string.format('active dist=%.1fm deg=%d', prim.dist, prim.deg or 0))
+    end
+    return loc_state('active waiting_pos')
+end
+
+local function hud_tick(preview_rec)
     local sr = _G.stingray
     local App, World, Gui = sr.Application, sr.World, sr.Gui
     local worlds = (App and type(App.worlds) == 'function') and (App.worlds() or {}) or nil
@@ -1683,19 +3029,7 @@ local function hud_tick()
 
     refresh_foreground_over_mdl_panel(worlds)
 
-    local r = M.best
-    if not r and (C.hud_preview or M.live_menu_preview) then
-        r = {
-            hp = 112500,
-            max = DEFAULT_MAX_HP,
-            trail_hp = 127500,
-            last_damage = 15000,
-            last_hit_at = M.clock,
-            preview = true,
-            dead = false,
-            burrowed = false,
-        }
-    end
+    local r = M.best or preview_rec
 
     -- Abandon stale surfaces if their world disappeared or mission epoch changed.
     if M.gui and (not live_world(worlds, M.gui_world, M.gui_world_key)
@@ -1777,17 +3111,24 @@ local function hud_tick()
     local fonts = read_mdl3_font_hex()
     local want_mode = fonts and 'native' or 'debug'
     local sig_txt, sig_sub = format_hud_lines(r, want_mode == 'native' and is_chinese_ui())
-    local dkey = string.format('%s\n%s\n%d|%d|%d|%d|%s|%s|%s',
-        sig_txt, sig_sub,
+    local has_dist = (C.locator_bar_distance and target_for_record(r) ~= nil) == true
+    local core_key = string.format('%s|%s|%s|%d|%d|%d|%d|%s|%s|%s',
+        sig_txt, tostring(r.burrowed), tostring(r.last_damage or 0),
         math.floor(w_px), math.floor(h_px),
-        math.floor(by), a, want_mode, tostring(C.hud_bar), tostring(r.dead))
+        math.floor(center_x), math.floor(by), a, want_mode, tostring(C.hud_bar))
+    local dkey = core_key .. '\n' .. sig_sub
 
     if dkey ~= M.draw_key then
-        -- Throttle native text GUI rebuilds during ultra-high-ROF damage ticks (<= 20 Hz),
-        -- except on immediate state changes (spawn, death, preview).
-        if want_mode == 'native' and M.text_gui ~= nil and not r.dead and not r.preview
-            and (M.clock - M.text_last_rebuild) < 0.05 then
-            return
+        -- Throttle native text GUI rebuilds: 20 Hz for HP/damage ticks, 5 Hz when only distance changes
+        -- (except when distance first becomes available or state/preview changes).
+        if want_mode == 'native' and M.text_gui ~= nil and not r.dead and not r.preview then
+            local dist_appeared = has_dist and not M.last_bar_has_dist
+            if not dist_appeared then
+                local min_gap = (core_key == M.last_bar_core_key) and 0.20 or 0.05
+                if (M.clock - M.text_last_rebuild) < min_gap then
+                    return
+                end
+            end
         end
         local title_y = by + bh + 6 * sc
         local sub_y = by - 19 * sc
@@ -1812,6 +3153,8 @@ local function hud_tick()
             ok, shown_txt = paint_debug_texts(center_x, bx, title_y, sub_y, sc, r, a)
         end
         M.draw_key = dkey
+        M.last_bar_core_key = core_key
+        M.last_bar_has_dist = has_dist
         hud_state(string.format('painted=%s font=%s text="%s"',
             tostring(ok), tostring(M.font_mode), tostring(shown_txt)))
     end
@@ -1838,8 +3181,13 @@ local function step(dt)
     local settings_open = mdl_settings_open()
     if settings_open and not M.was_settings_open then
         sync_mom_from_config(M.mom_ref)
-    elseif not settings_open and M.was_settings_open and M.cfg_dirty then
-        write_config_now('menu_close')
+    elseif not settings_open then
+        if M.was_settings_open and M.cfg_dirty then
+            write_config_now('menu_close')
+        end
+        if M.live_menu_preview then
+            M.live_menu_preview = false
+        end
     end
     M.was_settings_open = settings_open
     if M.cfg_dirty and M.clock >= (M.cfg_save_due_at or 0) then
@@ -1847,7 +3195,11 @@ local function step(dt)
     end
     hub_tick()
     prune_and_select(d)
-    hud_tick()
+    poll_live_positions()
+    local preview_rec = (not M.best and (C.hud_preview or M.live_menu_preview)) and make_preview_record() or nil
+    sample_spatial_state(preview_rec)
+    hud_tick(preview_rec)
+    locator_tick(M.best or preview_rec)
 end
 
 local prev_update = rawget(_G, 'update')
@@ -1864,6 +3216,7 @@ rawset(_G, 'shutdown', function(...)
         M.active = false
         if M.cfg_dirty then write_config_now('shutdown') end
         unsubscribe_all()
+        dispose_locator_guis()
         local App = sr and sr.Application
         local worlds = (App and type(App.worlds) == 'function') and ok_call(App.worlds) or nil
         clear_hud(worlds)
@@ -1884,8 +3237,8 @@ wf('INSTALLED version=%s', VERSION)
 
 return {
     installed = true,
-    name = ZH.mod_title,
+    name = is_chinese_ui() and ZH.mod_title or EN.mod_title,
     version = VERSION,
     author = 'hivelord',
-    description = ZH.mod_desc,
+    description = is_chinese_ui() and ZH.mod_desc or EN.mod_desc,
 }

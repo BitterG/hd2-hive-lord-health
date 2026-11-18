@@ -71,30 +71,35 @@ PROBE = {
 HEALTH = {
     'entry': ROOT / 'Source/mods/hivelord/hivelord_health.lua',
     'resource': 'mods/hivelord/hivelord_health',
-    'display': '霸王虫血量显示 v2.2.0 (Hive Lord Health)',
-    'option_name': '霸王虫血量显示模组本体 (Hive Lord Health)',
-    'zip': 'HiveLord-HP-Health-2.2.0.zip',
+    'display': '霸王虫血量与定位 v2.3.0 (Hive Lord Health)',
+    'option_name': '霸王虫血量与定位模组本体 (Hive Lord Health)',
+    'zip': 'HiveLord-HP-Health-2.3.0.zip',
     'guid': '3e9c7a41-5b28-4d0e-9f13-8a2c6b7d4e91',
-    'blurb': ('需要 MDL3 + HD2 Data Hub (0.3.0+) 前置。实时精确显示霸王虫 Boss 血量条、'
-              '当前/最大生命值与百分比，支持 ESC -> MDL 设置实时预览调节位置与自动保存（纯只读）。'),
+    'blurb': ('需要 MDL3 + HD2 Data Hub (0.3.0+) 前置（定位雷达与方位箭头需 MDL3 dev.41+）。'
+              '实时精确显示霸王虫 Boss 血量条、战术定位小雷达、准星方位箭头与实时距离，'
+              '支持中英双语切换及 ESC -> MDL 设置实时预览调节与自动保存（纯只读）。 / '
+              'Real-time Hive Lord Boss HP bar, 30 Hz live tactical locator radar & center directional pointer '
+              'with bilingual ZH/EN UI (requires MDL3 + HD2 Data Hub; radar requires MDL3 dev.41+).'),
     'required': [
         ('-- HD2-Addon: mods/hivelord/hivelord_health', 'addon declaration'),
         ('HD2Data', 'HD2 Data Hub API 1 event bridge'),
         ('enemy/v1/terminids/hive_lord', 'Hive Lord semantic catalog identity'),
         ('D465D9C7F77A07CB', 'Hive Lord 64-bit entity type hash fallback'),
         ('ModOptionsMenu', 'MDL3 in-game settings integration'),
+        ('locator_gui_api', 'MDL3.gui tactical locator integration'),
         ('unsubscribe_all', 'clean HD2Data subscription teardown'),
     ],
     'allow_members': {
-        'GameSession': set(),
-        'Network': set(),
+        'GameSession': {'game_object_exists', 'game_object_field_batched', 'in_session'},
+        'Network': {'game_session'},
         'Application': {'worlds', 'main_world', 'can_get'},
         'World': {'create_screen_gui', 'destroy_gui'},
         'Gui': {'text', 'update_text', 'destroy_text', 'rect', 'update_rect',
                 'destroy_rect', 'resolution', 'material', 'text_extents'},
     },
     'allow_sr': {'Application', 'World', 'Gui', 'Vector2',
-                 'Vector3', 'Color', 'IdString64', 'Material'},
+                 'Vector3', 'Color', 'IdString64', 'Material',
+                 'Network', 'GameSession'},
     'allow_ffi': False,
     'extra': [],
     'readme': 'README.md',
